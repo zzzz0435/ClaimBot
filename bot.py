@@ -24,9 +24,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     log.info("Bot 已上線：%s", bot.user)
-    await bot.add_cog(FreeGamesCog(bot))
+    cog = FreeGamesCog(bot)
+    await bot.add_cog(cog)
     await bot.tree.sync()
     log.info("Slash commands 已同步")
+    for guild in bot.guilds:
+        if guild.id not in [int(gid) for gid in cog._guild_channels._channels]:
+            channel = await cog._setup_channel(guild)
+            if channel:
+                cog._guild_channels.set(guild.id, channel.id)
+                await channel.send(
+                    "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 限時免費遊戲。\n"
+                    "你也可以隨時輸入 `/freegames` 手動查詢目前的免費遊戲 🎮"
+                )
+                log.info("已在伺服器 %s 建立頻道 %s", guild.name, channel.name)
 
 
 bot.run(TOKEN)
