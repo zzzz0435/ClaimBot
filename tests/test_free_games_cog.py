@@ -1,0 +1,75 @@
+import discord
+import pytest
+from services.itad_client import FreeGame
+from cogs.free_games import filter_new_games, build_embed
+
+
+def make_game(game_id: str, expires_at: str | None = None) -> FreeGame:
+    return FreeGame(
+        id=game_id,
+        title=f"Game {game_id}",
+        url=f"https://store.steampowered.com/app/{game_id}/",
+        image_url="https://example.com/img.jpg",
+        expires_at=expires_at,
+    )
+
+
+# --- filter_new_games ---
+
+def test_filters_out_seen_games():
+    games = [make_game("app/1"), make_game("app/2"), make_game("app/3")]
+    result = filter_new_games(games, seen_ids={"app/1"})
+    assert [g.id for g in result] == ["app/2", "app/3"]
+
+
+def test_returns_empty_when_all_seen():
+    games = [make_game("app/1"), make_game("app/2")]
+    assert filter_new_games(games, seen_ids={"app/1", "app/2"}) == []
+
+
+def test_returns_all_when_nothing_seen():
+    games = [make_game("app/1"), make_game("app/2")]
+    assert len(filter_new_games(games, seen_ids=set())) == 2
+
+
+# --- build_embed ---
+
+def test_embed_has_title_and_url():
+    game = make_game("app/1")
+    embed = build_embed(game)
+    assert embed.title == "Game app/1"
+    assert embed.url == "https://store.steampowered.com/app/app/1/"
+
+
+def test_embed_color_is_green():
+    embed = build_embed(make_game("app/1"))
+    assert embed.color == discord.Color(0x2ECC71)
+
+
+def test_embed_has_image_when_url_provided():
+    game = make_game("app/1")
+    embed = build_embed(game)
+    assert embed.image.url == "https://example.com/img.jpg"
+
+
+def test_embed_no_image_when_url_empty():
+    game = FreeGame(id="app/1", title="T", url="https://x.com", image_url="", expires_at=None)
+    embed = build_embed(game)
+    assert embed.image.url is None
+
+
+def test_embed_shows_expiry_field_when_present():
+    game = make_game("app/1", expires_at="2026-06-01T17:00:00Z")
+    embed = build_embed(game)
+    assert any(f.name == "到期時間" for f in embed.fields)
+
+
+def test_embed_no_expiry_field_when_none():
+    game = make_game("app/1", expires_at=None)
+    embed = build_embed(game)
+    assert not any(f.name == "到期時間" for f in embed.fields)
+
+
+def test_embed_footer_text():
+    embed = build_embed(make_game("app/1"))
+    assert embed.footer.text == "資料來源：IsThereAnyDeal"
