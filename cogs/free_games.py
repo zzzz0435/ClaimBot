@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from services.gamerpower_client import FreeGame, GamerPowerClient
@@ -25,7 +26,7 @@ def build_embed(game: FreeGame) -> discord.Embed:
         embed.add_field(name="🎮 在 Steam 領取", value=f"[點我領取]({game.url})", inline=False)
     if game.expires_at:
         embed.add_field(name="⏰ 到期時間", value=game.expires_at, inline=False)
-    embed.set_footer(text="資料來源：IsThereAnyDeal")
+    embed.set_footer(text="資料來源：GamerPower")
     return embed
 
 
@@ -63,3 +64,13 @@ class FreeGamesCog(commands.Cog):
     @check_free_games.before_loop
     async def before_check(self):
         await self._bot.wait_until_ready()
+
+    @app_commands.command(name="freegames", description="查詢目前 Steam 限時免費遊戲")
+    async def freegames(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        games = await self._client.get_free_games()
+        if not games:
+            await interaction.followup.send("目前沒有 Steam 限時免費遊戲 🎮")
+            return
+        for game in games:
+            await interaction.followup.send(embed=build_embed(game))

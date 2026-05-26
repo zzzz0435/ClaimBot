@@ -78,4 +78,4 @@ def test_embed_no_expiry_field_when_none():
 
 def test_embed_footer_text():
     embed = build_embed(make_game("app/1"))
-    assert embed.footer.text == "資料來源：IsThereAnyDeal"
+    assert embed.footer.text == "資料來源：GamerPower"

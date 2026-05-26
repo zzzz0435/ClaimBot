@@ -31,6 +31,8 @@ async def on_ready():
         return
     log.info("Bot 已上線：%s，目標頻道：#%s", bot.user, channel.name)
     await bot.add_cog(FreeGamesCog(bot, CHANNEL_ID))
+    await bot.tree.sync()
+    log.info("Slash commands 已同步")
 
 
 bot.run(TOKEN)
