@@ -48,7 +48,11 @@ class ITADClient:
             items = data
         else:
             items = data.get("games") or data.get("list") or data.get("deals") or []
-        return [self._parse(item) for item in items]
+        limited_free = [
+            item for item in items
+            if item.get("deal", {}).get("regular", {}).get("amount", 0) > 0
+        ]
+        return [self._parse(item) for item in limited_free]
 
     def _parse(self, item: dict) -> FreeGame:
         assets = item.get("assets", {})
