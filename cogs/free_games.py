@@ -112,10 +112,21 @@ class FreeGamesCog(commands.Cog):
 
     @app_commands.command(name="freegames", description="查詢目前 Steam 限時免費遊戲")
     async def freegames(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
+
+        channel_id = self._guild_channels._channels.get(str(interaction.guild_id))
+        target = self._bot.get_channel(channel_id) if channel_id else None
+
+        if target is None:
+            await interaction.followup.send("❌ 尚未設定通知頻道，請先執行 `/setchannel`。", ephemeral=True)
+            return
+
         games = await self._client.get_free_games()
         if not games:
-            await interaction.followup.send("目前沒有 Steam 限時免費遊戲 🎮")
+            await interaction.followup.send("目前沒有 Steam 限時免費遊戲 🎮", ephemeral=True)
             return
+
         for game in games:
-            await interaction.followup.send(embed=build_embed(game))
+            await target.send(embed=build_embed(game))
+
+        await interaction.followup.send(f"✅ 已發送至 {target.mention}", ephemeral=True)
