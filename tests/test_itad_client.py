@@ -8,26 +8,20 @@ FAKE_KEY = "test_key"
 ITAD_URL_PATTERN = re.compile(r"https://api\.isthereanydeal\.com/deals/v2.*")
 
 MOCK_RESPONSE = {
-    "hasMore": False,
-    "nextCursor": None,
-    "list": [
+    "games": [
         {
-            "game": {
-                "id": 12345,
-                "title": "Free Game One",
-                "assets": {"banner300": "https://example.com/banner.jpg"},
-            },
+            "id": 12345,
+            "title": "Free Game One",
+            "assets": {"banner300": "https://example.com/banner.jpg"},
             "deal": {
                 "url": "https://store.steampowered.com/app/12345/",
                 "expiry": "2026-06-01T17:00:00Z",
             },
         },
         {
-            "game": {
-                "id": 67890,
-                "title": "Free Game Two (No Image)",
-                "assets": {},
-            },
+            "id": 67890,
+            "title": "Free Game Two (No Image)",
+            "assets": {},
             "deal": {
                 "url": "https://store.steampowered.com/app/67890/",
                 "expiry": None,

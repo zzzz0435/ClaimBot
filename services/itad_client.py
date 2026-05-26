@@ -44,15 +44,14 @@ class ITADClient:
             log.warning("ITAD API 請求失敗：%s", exc)
             return []
 
-        return [self._parse(item) for item in data.get("list", [])]
+        return [self._parse(item) for item in data.get("games", [])]
 
     def _parse(self, item: dict) -> FreeGame:
-        game = item.get("game", {})
-        assets = game.get("assets", {})
+        assets = item.get("assets", {})
         deal = item.get("deal", {})
         return FreeGame(
-            id=str(game.get("id", "")),
-            title=game.get("title", ""),
+            id=str(item.get("id", "")),
+            title=item.get("title", ""),
             url=deal.get("url", ""),
             image_url=assets.get("banner300") or assets.get("banner145") or "",
             expires_at=deal.get("expiry"),
