@@ -71,6 +71,30 @@ class FreeGamesCog(commands.Cog):
     async def before_check(self):
         await self._bot.wait_until_ready()
 
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        channel = await self._setup_channel(guild)
+        if channel:
+            self._guild_channels.set(guild.id, channel.id)
+            await channel.send(
+                "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 限時免費遊戲。\n"
+                "你也可以隨時輸入 `/freegames` 手動查詢目前的免費遊戲 🎮"
+            )
+            log.info("已在伺服器 %s 建立頻道 %s", guild.name, channel.name)
+
+    async def _setup_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
+        existing = discord.utils.get(guild.text_channels, name="免費遊戲")
+        if existing:
+            return existing
+        try:
+            return await guild.create_text_channel(
+                name="免費遊戲",
+                topic="Steam 限時免費遊戲通知 | 由 ClaimBot 自動推送",
+            )
+        except discord.Forbidden:
+            log.warning("在伺服器 %s 沒有建立頻道的權限", guild.name)
+            return None
+
     @app_commands.command(name="setchannel", description="設定此頻道為免費遊戲通知頻道（需管理員權限）")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def setchannel(self, interaction: discord.Interaction):
