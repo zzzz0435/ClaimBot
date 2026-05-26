@@ -17,7 +17,6 @@ log = logging.getLogger(__name__)
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["DISCORD_CHANNEL_ID"])
-ITAD_API_KEY = os.environ["ITAD_API_KEY"]
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -31,7 +30,7 @@ async def on_ready():
         await bot.close()
         return
     log.info("Bot 已上線：%s，目標頻道：#%s", bot.user, channel.name)
-    await bot.add_cog(FreeGamesCog(bot, CHANNEL_ID, ITAD_API_KEY))
+    await bot.add_cog(FreeGamesCog(bot, CHANNEL_ID))
 
 
 bot.run(TOKEN)

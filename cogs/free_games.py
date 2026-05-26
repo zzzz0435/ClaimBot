@@ -4,7 +4,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands, tasks
 
-from services.itad_client import FreeGame, ITADClient
+from services.gamerpower_client import FreeGame, GamerPowerClient
 from storage.seen_games import SeenGames
 
 log = logging.getLogger(__name__)
@@ -30,10 +30,10 @@ def build_embed(game: FreeGame) -> discord.Embed:
 
 
 class FreeGamesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, channel_id: int, itad_api_key: str):
+    def __init__(self, bot: commands.Bot, channel_id: int):
         self._bot = bot
         self._channel_id = channel_id
-        self._client = ITADClient(api_key=itad_api_key)
+        self._client = GamerPowerClient()
         self._seen = SeenGames(SEEN_GAMES_PATH)
         self.check_free_games.start()
 

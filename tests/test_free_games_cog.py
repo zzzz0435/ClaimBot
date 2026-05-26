@@ -1,6 +1,6 @@
 import discord
 import pytest
-from services.itad_client import FreeGame
+from services.gamerpower_client import FreeGame
 from cogs.free_games import filter_new_games, build_embed
 
 
