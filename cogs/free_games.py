@@ -21,8 +21,10 @@ def build_embed(game: FreeGame) -> discord.Embed:
     embed = discord.Embed(title=game.title, url=game.url, color=EMBED_COLOR)
     if game.image_url:
         embed.set_image(url=game.image_url)
+    if game.url:
+        embed.add_field(name="🎮 在 Steam 領取", value=f"[點我領取]({game.url})", inline=False)
     if game.expires_at:
-        embed.add_field(name="到期時間", value=game.expires_at, inline=False)
+        embed.add_field(name="⏰ 到期時間", value=game.expires_at, inline=False)
     embed.set_footer(text="資料來源：IsThereAnyDeal")
     return embed
 

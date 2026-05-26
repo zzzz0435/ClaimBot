@@ -58,16 +58,22 @@ def test_embed_no_image_when_url_empty():
     assert embed.image.url is None
 
 
+def test_embed_shows_claim_link_field():
+    game = make_game("app/1")
+    embed = build_embed(game)
+    assert any(f.name == "🎮 在 Steam 領取" for f in embed.fields)
+
+
 def test_embed_shows_expiry_field_when_present():
     game = make_game("app/1", expires_at="2026-06-01T17:00:00Z")
     embed = build_embed(game)
-    assert any(f.name == "到期時間" for f in embed.fields)
+    assert any(f.name == "⏰ 到期時間" for f in embed.fields)
 
 
 def test_embed_no_expiry_field_when_none():
     game = make_game("app/1", expires_at=None)
     embed = build_embed(game)
-    assert not any(f.name == "到期時間" for f in embed.fields)
+    assert not any(f.name == "⏰ 到期時間" for f in embed.fields)
 
 
 def test_embed_footer_text():

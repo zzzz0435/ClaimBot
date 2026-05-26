@@ -44,7 +44,11 @@ class ITADClient:
             log.warning("ITAD API 請求失敗：%s", exc)
             return []
 
-        return [self._parse(item) for item in data.get("games", [])]
+        if isinstance(data, list):
+            items = data
+        else:
+            items = data.get("games") or data.get("list") or data.get("deals") or []
+        return [self._parse(item) for item in items]
 
     def _parse(self, item: dict) -> FreeGame:
         assets = item.get("assets", {})
