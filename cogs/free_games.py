@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from services.gamerpower_client import FreeGame, GamerPowerClient
+from storage.guild_channels import GuildChannels
 from storage.seen_games import SeenGames
 
 log = logging.getLogger(__name__)
@@ -31,11 +32,11 @@ def build_embed(game: FreeGame) -> discord.Embed:
 
 
 class FreeGamesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, channel_id: int):
+    def __init__(self, bot: commands.Bot):
         self._bot = bot
-        self._channel_id = channel_id
         self._client = GamerPowerClient()
         self._seen = SeenGames(SEEN_GAMES_PATH)
+        self._guild_channels = GuildChannels()
         self.check_free_games.start()
 
     def cog_unload(self):
@@ -43,9 +44,9 @@ class FreeGamesCog(commands.Cog):
 
     @tasks.loop(hours=6)
     async def check_free_games(self):
-        channel = self._bot.get_channel(self._channel_id)
-        if channel is None:
-            log.error("找不到頻道 ID %s", self._channel_id)
+        channels = self._guild_channels.all_channels()
+        if not channels:
+            log.info("尚未有任何伺服器設定頻道，跳過")
             return
 
         games = await self._client.get_free_games()
@@ -55,15 +56,35 @@ class FreeGamesCog(commands.Cog):
             log.info("無新免費遊戲，跳過")
             return
 
-        for game in new_games:
-            await channel.send(embed=build_embed(game))
+        for channel_id in channels:
+            channel = self._bot.get_channel(channel_id)
+            if channel is None:
+                log.warning("找不到頻道 ID %s，跳過", channel_id)
+                continue
+            for game in new_games:
+                await channel.send(embed=build_embed(game))
 
         self._seen.add({g.id for g in new_games})
-        log.info("已發送 %d 款新免費遊戲", len(new_games))
+        log.info("已發送 %d 款新免費遊戲至 %d 個頻道", len(new_games), len(channels))
 
     @check_free_games.before_loop
     async def before_check(self):
         await self._bot.wait_until_ready()
+
+    @app_commands.command(name="setchannel", description="設定此頻道為免費遊戲通知頻道（需管理員權限）")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setchannel(self, interaction: discord.Interaction):
+        self._guild_channels.set(interaction.guild_id, interaction.channel_id)
+        await interaction.response.send_message(
+            f"✅ 已將 {interaction.channel.mention} 設為本伺服器的免費遊戲通知頻道！",
+            ephemeral=True,
+        )
+        log.info("伺服器 %s 設定頻道 %s", interaction.guild_id, interaction.channel_id)
+
+    @setchannel.error
+    async def setchannel_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ 需要「管理伺服器」權限才能設定通知頻道。", ephemeral=True)
 
     @app_commands.command(name="freegames", description="查詢目前 Steam 限時免費遊戲")
     async def freegames(self, interaction: discord.Interaction):
