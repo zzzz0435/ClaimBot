@@ -5,7 +5,7 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
-ITAD_DEALS_URL = "https://api.isthereanydeal.com/v3/deals"
+ITAD_DEALS_URL = "https://api.isthereanydeal.com/deals/v2"
 
 
 @dataclass
@@ -23,7 +23,7 @@ class ITADClient:
 
     async def get_free_games(self) -> list[FreeGame]:
         params = {
-            "shops": "steam",
+            "shops": 61,
             "price_max": 0,
             "limit": 20,
             "key": self._api_key,
@@ -46,11 +46,12 @@ class ITADClient:
         return [self._parse(item) for item in data.get("list", [])]
 
     def _parse(self, item: dict) -> FreeGame:
-        assets = item.get("assets", {})
+        game = item.get("game", {})
+        assets = game.get("assets", {})
         deal = item.get("deal", {})
         return FreeGame(
-            id=item["id"],
-            title=item["title"],
+            id=str(game.get("id", "")),
+            title=game.get("title", ""),
             url=deal.get("url", ""),
             image_url=assets.get("banner300") or assets.get("banner145") or "",
             expires_at=deal.get("expiry"),

@@ -5,25 +5,29 @@ from aioresponses import aioresponses
 from services.itad_client import ITADClient, FreeGame
 
 FAKE_KEY = "test_key"
-ITAD_URL_PATTERN = re.compile(r"https://api\.isthereanydeal\.com/v3/deals.*")
+ITAD_URL_PATTERN = re.compile(r"https://api\.isthereanydeal\.com/deals/v2.*")
 
 MOCK_RESPONSE = {
     "hasMore": False,
     "nextCursor": None,
     "list": [
         {
-            "id": "app/12345",
-            "title": "Free Game One",
-            "assets": {"banner300": "https://example.com/banner.jpg"},
+            "game": {
+                "id": 12345,
+                "title": "Free Game One",
+                "assets": {"banner300": "https://example.com/banner.jpg"},
+            },
             "deal": {
                 "url": "https://store.steampowered.com/app/12345/",
                 "expiry": "2026-06-01T17:00:00Z",
             },
         },
         {
-            "id": "app/67890",
-            "title": "Free Game Two (No Image)",
-            "assets": {},
+            "game": {
+                "id": 67890,
+                "title": "Free Game Two (No Image)",
+                "assets": {},
+            },
             "deal": {
                 "url": "https://store.steampowered.com/app/67890/",
                 "expiry": None,
@@ -42,7 +46,7 @@ async def test_returns_parsed_free_games():
     assert len(games) == 2
     g = games[0]
     assert isinstance(g, FreeGame)
-    assert g.id == "app/12345"
+    assert g.id == "12345"
     assert g.title == "Free Game One"
     assert g.url == "https://store.steampowered.com/app/12345/"
     assert g.image_url == "https://example.com/banner.jpg"
