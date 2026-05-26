@@ -24,6 +24,7 @@ class ITADClient:
     async def get_free_games(self) -> list[FreeGame]:
         params = {
             "shops": 61,
+            "country": "US",
             "price_max": 0,
             "limit": 20,
             "key": self._api_key,
