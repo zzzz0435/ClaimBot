@@ -37,3 +37,6 @@ class GuildChannels:
 
     def all_channels(self) -> list[int]:
         return list(self._channels.values())
+
+    def all_items(self) -> list[tuple[int, int]]:
+        return [(int(gid), cid) for gid, cid in self._channels.items()]

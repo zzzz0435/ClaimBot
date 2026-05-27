@@ -1,16 +1,17 @@
 import discord
 import pytest
 from services.gamerpower_client import FreeGame
-from cogs.free_games import filter_new_games, build_embed
+from cogs.free_games import filter_new_games, build_embed, build_view
 
 
-def make_game(game_id: str, expires_at: str | None = None) -> FreeGame:
+def make_game(game_id: str, expires_at: str | None = None, platform: str = "steam") -> FreeGame:
     return FreeGame(
         id=game_id,
         title=f"Game {game_id}",
         url=f"https://store.steampowered.com/app/{game_id}/",
         image_url="https://example.com/img.jpg",
         expires_at=expires_at,
+        platform=platform,
     )
 
 
@@ -53,15 +54,9 @@ def test_embed_has_image_when_url_provided():
 
 
 def test_embed_no_image_when_url_empty():
-    game = FreeGame(id="app/1", title="T", url="https://x.com", image_url="", expires_at=None)
+    game = FreeGame(id="app/1", title="T", url="https://x.com", image_url="", expires_at=None, platform="steam")
     embed = build_embed(game)
     assert embed.image.url is None
-
-
-def test_embed_shows_claim_link_field():
-    game = make_game("app/1")
-    embed = build_embed(game)
-    assert any(f.name == "🎮 在 Steam 領取" for f in embed.fields)
 
 
 def test_embed_shows_expiry_field_when_present():
@@ -79,3 +74,29 @@ def test_embed_no_expiry_field_when_none():
 def test_embed_footer_text():
     embed = build_embed(make_game("app/1"))
     assert embed.footer.text == "資料來源：GamerPower"
+
+
+# --- build_view ---
+
+def test_view_has_steam_button():
+    game = make_game("app/1", platform="steam")
+    view = build_view(game)
+    buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+    assert len(buttons) == 1
+    assert buttons[0].emoji.name == "🎮"
+    assert "Steam" in buttons[0].label
+    assert buttons[0].url == game.url
+
+
+def test_view_has_epic_button():
+    game = make_game("app/1", platform="epic-games-store")
+    view = build_view(game)
+    buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+    assert len(buttons) == 1
+    assert "Epic" in buttons[0].label
+
+
+def test_view_no_button_when_no_url():
+    game = FreeGame(id="1", title="T", url="", image_url="", expires_at=None, platform="steam")
+    view = build_view(game)
+    assert len(view.children) == 0
