@@ -3,3 +3,8 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+assets/*.png
+assets/*.jpg
+assets/*.jpeg
+assets/*.gif
+assets/*.webp

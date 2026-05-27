@@ -61,14 +61,29 @@ def test_embed_epic_color():
     assert embed.color == discord.Color(0x0074E4)
 
 
-def test_embed_author_steam():
+def test_embed_author_steam_fallback():
+    # 無 emoji_ids 時使用 Unicode fallback
     embed = build_embed(make_game("1", platform="steam"))
     assert embed.author.name == "🎮 Steam 限時免費"
+    assert embed.author.icon_url is None
 
 
-def test_embed_author_epic():
+def test_embed_author_epic_fallback():
     embed = build_embed(make_game("1", platform="epic-games-store"))
     assert embed.author.name == "⚡ Epic Games 限時免費"
+
+
+def test_embed_author_with_emoji_ids():
+    # 有 emoji_ids 時使用 icon_url 顯示品牌 Logo
+    emoji_ids = {"steam": 123456789}
+    embed = build_embed(make_game("1", platform="steam"), emoji_ids=emoji_ids)
+    assert embed.author.name == "Steam 限時免費"
+    assert embed.author.icon_url == "https://cdn.discordapp.com/emojis/123456789.png"
+
+
+def test_embed_author_icon_url_not_set_without_emoji_ids():
+    embed = build_embed(make_game("1", platform="steam"), emoji_ids=None)
+    assert embed.author.icon_url is None
 
 
 def test_embed_has_image():
@@ -110,7 +125,8 @@ def test_embed_footer():
 
 # --- build_view ---
 
-def test_view_has_steam_button():
+def test_view_has_steam_button_fallback():
+    # 無 emoji_ids 時按鈕 emoji 為 🎮
     view = build_view(make_game("1", platform="steam"))
     buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
     assert len(buttons) == 1
@@ -118,10 +134,20 @@ def test_view_has_steam_button():
     assert buttons[0].url.endswith("/1/")
 
 
-def test_view_has_epic_button():
+def test_view_has_epic_button_fallback():
     view = build_view(make_game("1", platform="epic-games-store"))
     buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
     assert "Epic" in buttons[0].label
+
+
+def test_view_button_uses_partial_emoji_when_emoji_ids_provided():
+    # 有 emoji_ids 時按鈕 emoji 為 PartialEmoji
+    emoji_ids = {"steam": 987654321}
+    view = build_view(make_game("1", platform="steam"), emoji_ids=emoji_ids)
+    buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+    assert len(buttons) == 1
+    assert isinstance(buttons[0].emoji, discord.PartialEmoji)
+    assert buttons[0].emoji.id == 987654321
 
 
 def test_view_no_button_when_no_url():

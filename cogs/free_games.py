@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from services.emoji_setup import EMOJI_NAMES
 from services.epic_client import EpicClient, UpcomingGame
 from services.gamerpower_client import FreeGame, GamerPowerClient, PLATFORM_LABELS
 from storage.guild_channels import GuildChannels
@@ -20,12 +21,16 @@ UPCOMING_COLOR = discord.Color(0xF5A623)
 
 # 每個平台的 Embed 顏色
 PLATFORM_COLORS: dict[str, discord.Color] = {
-    "steam": discord.Color(0x2ECC71),       # 綠
-    "epic-games-store": discord.Color(0x0074E4),  # Epic 藍
+    "steam": discord.Color(0x2ECC71),
+    "epic-games-store": discord.Color(0x0074E4),
 }
 
-# Embed 頂部 author 欄文字
-PLATFORM_AUTHOR: dict[str, str] = {
+# Author 欄文字（有 Application Emoji 時搭配 icon_url，沒有時加前綴 emoji）
+PLATFORM_AUTHOR_TEXT: dict[str, str] = {
+    "steam": "Steam 限時免費",
+    "epic-games-store": "Epic Games 限時免費",
+}
+PLATFORM_AUTHOR_FALLBACK: dict[str, str] = {
     "steam": "🎮 Steam 限時免費",
     "epic-games-store": "⚡ Epic Games 限時免費",
 }
@@ -35,10 +40,19 @@ def filter_new_games(games: list[FreeGame], seen_ids: set[str]) -> list[FreeGame
     return [g for g in games if g.id not in seen_ids]
 
 
-def build_embed(game: FreeGame) -> discord.Embed:
+def build_embed(game: FreeGame, emoji_ids: dict[str, int] | None = None) -> discord.Embed:
     color = PLATFORM_COLORS.get(game.platform, discord.Color(0x2ECC71))
     embed = discord.Embed(title=game.title, url=game.url, color=color)
-    embed.set_author(name=PLATFORM_AUTHOR.get(game.platform, "🎮 限時免費"))
+
+    # Author 欄：有 Application Emoji 時用品牌 Logo 作為 icon，否則用 Unicode emoji
+    emoji_id = (emoji_ids or {}).get(game.platform)
+    if emoji_id:
+        embed.set_author(
+            name=PLATFORM_AUTHOR_TEXT.get(game.platform, "限時免費"),
+            icon_url=f"https://cdn.discordapp.com/emojis/{emoji_id}.png",
+        )
+    else:
+        embed.set_author(name=PLATFORM_AUTHOR_FALLBACK.get(game.platform, "🎮 限時免費"))
 
     if game.image_url:
         embed.set_image(url=game.image_url)
@@ -61,14 +75,25 @@ def build_embed(game: FreeGame) -> discord.Embed:
     return embed
 
 
-def build_view(game: FreeGame) -> discord.ui.View:
+def build_view(game: FreeGame, emoji_ids: dict[str, int] | None = None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if game.url:
         platform_label = PLATFORM_LABELS.get(game.platform, game.platform)
+
+        # 按鈕 emoji：有 Application Emoji 用品牌 Logo，否則用 🎮
+        emoji_id = (emoji_ids or {}).get(game.platform)
+        if emoji_id:
+            emoji_name = EMOJI_NAMES.get(game.platform, "emoji")
+            button_emoji: discord.PartialEmoji | str = discord.PartialEmoji(
+                name=emoji_name, id=emoji_id
+            )
+        else:
+            button_emoji = "🎮"
+
         view.add_item(discord.ui.Button(
             label=f"在 {platform_label} 領取",
             url=game.url,
-            emoji="🎮",
+            emoji=button_emoji,
             style=discord.ButtonStyle.link,
         ))
     return view
@@ -115,8 +140,9 @@ def build_upcoming_view(game: UpcomingGame) -> discord.ui.View:
 
 
 class FreeGamesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, emoji_ids: dict[str, int] | None = None):
         self._bot = bot
+        self._emoji_ids: dict[str, int] = emoji_ids or {}
         self._client = GamerPowerClient()
         self._epic_client = EpicClient()
         self._seen = SeenGames(SEEN_GAMES_PATH)
@@ -164,7 +190,7 @@ class FreeGamesCog(commands.Cog):
             content = f"<@&{role_id}>" if role_id else None
 
             for game in guild_games:
-                await channel.send(content=content, embed=build_embed(game), view=build_view(game))
+                await channel.send(content=content, embed=build_embed(game, self._emoji_ids), view=build_view(game, self._emoji_ids))
                 total_sent += 1
 
         self._seen.add({g.id for g in new_games})
@@ -404,6 +430,6 @@ class FreeGamesCog(commands.Cog):
         content = f"<@&{role_id}>" if role_id else None
 
         for game in games:
-            await target.send(content=content, embed=build_embed(game), view=build_view(game))
+            await target.send(content=content, embed=build_embed(game, self._emoji_ids), view=build_view(game, self._emoji_ids))
 
         await interaction.followup.send(f"✅ 已發送至 {target.mention}", ephemeral=True)

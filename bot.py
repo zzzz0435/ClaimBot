@@ -6,6 +6,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from cogs.free_games import FreeGamesCog
+from services.emoji_setup import EmojiSetup
 
 load_dotenv()
 
@@ -24,7 +25,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     log.info("Bot 已上線：%s", bot.user)
-    cog = FreeGamesCog(bot)
+
+    # 上傳 / 確認 Application Emoji（需要 assets/steam.png 和 assets/epic.png）
+    emoji_setup = EmojiSetup(application_id=str(bot.application_id), token=TOKEN)
+    emoji_ids = await emoji_setup.ensure_emojis()
+    if emoji_ids:
+        log.info("Application Emoji 就緒：%s", list(emoji_ids.keys()))
+    else:
+        log.info("未設定 Application Emoji，使用 Unicode emoji fallback")
+
+    cog = FreeGamesCog(bot, emoji_ids=emoji_ids)
     await bot.add_cog(cog)
 
     # 全域同步（最長 1 小時生效）
@@ -43,8 +53,8 @@ async def on_ready():
             if channel:
                 cog._guild_channels.set(guild.id, channel.id)
                 await channel.send(
-                    "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 限時免費遊戲。\n"
-                    "你也可以隨時輸入 `/freegames` 手動查詢目前的免費遊戲 🎮"
+                    "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 及 Epic Games 限時免費遊戲。\n"
+                    "輸入 `/help` 查看所有指令說明 🎮"
                 )
                 log.info("已在伺服器 %s 建立頻道 %s", guild.name, channel.name)
 
