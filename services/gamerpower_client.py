@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -19,8 +20,9 @@ class FreeGame:
     title: str
     url: str
     image_url: str
-    expires_at: str | None
+    expires_at: datetime | None
     platform: str
+    worth: str | None          # 原價，例如 "$49.99"；無資料時為 None
 
 
 class GamerPowerClient:
@@ -62,13 +64,27 @@ class GamerPowerClient:
         )
 
     def _parse(self, item: dict, platform: str) -> FreeGame:
-        end_date = item.get("end_date")
-        expires_at = None if end_date in (None, "N/A") else end_date
         return FreeGame(
             id=str(item["id"]),
             title=item.get("title", ""),
             url=item.get("open_giveaway") or item.get("gamerpower_url", ""),
             image_url=item.get("image") or item.get("thumbnail", ""),
-            expires_at=expires_at,
+            expires_at=self._parse_date(item.get("end_date")),
             platform=platform,
+            worth=self._parse_worth(item.get("worth")),
         )
+
+    @staticmethod
+    def _parse_date(date_str: str | None) -> datetime | None:
+        if not date_str or date_str == "N/A":
+            return None
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_worth(worth: str | None) -> str | None:
+        if not worth or worth in ("N/A", "$0.00", "0.00", "$0"):
+            return None
+        return worth

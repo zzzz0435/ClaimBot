@@ -1,6 +1,7 @@
 import re
 import pytest
 import aiohttp
+from datetime import datetime, timezone
 from aioresponses import aioresponses
 from services.gamerpower_client import GamerPowerClient, FreeGame
 
@@ -18,6 +19,7 @@ STEAM_RESPONSE = [
         "open_giveaway": "https://store.steampowered.com/app/489630/",
         "gamerpower_url": "https://www.gamerpower.com/warhammer",
         "end_date": "2026-06-01 00:00:00",
+        "worth": "$39.99",
     },
     {
         "id": 1002,
@@ -30,6 +32,7 @@ STEAM_RESPONSE = [
         "open_giveaway": "https://store.steampowered.com/app/99999/",
         "gamerpower_url": "https://www.gamerpower.com/dlc",
         "end_date": "N/A",
+        "worth": "N/A",
     },
     {
         "id": 1004,
@@ -42,6 +45,7 @@ STEAM_RESPONSE = [
         "open_giveaway": "https://store.steampowered.com/app/55555/",
         "gamerpower_url": "https://www.gamerpower.com/expired",
         "end_date": "2026-01-01 00:00:00",
+        "worth": "$9.99",
     },
 ]
 
@@ -57,6 +61,7 @@ EPIC_RESPONSE = [
         "open_giveaway": "https://store.epicgames.com/en-US/p/game",
         "gamerpower_url": "https://www.gamerpower.com/epic-game",
         "end_date": "2026-06-15 00:00:00",
+        "worth": "$59.99",
     },
 ]
 
@@ -110,7 +115,7 @@ async def test_parsed_game_fields():
     assert isinstance(g, FreeGame)
     assert g.url == "https://store.steampowered.com/app/489630/"
     assert g.image_url == "https://example.com/warhammer.jpg"
-    assert g.expires_at == "2026-06-01 00:00:00"
+    assert g.expires_at == datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 
 async def test_end_date_na_becomes_none():
@@ -151,3 +156,46 @@ async def test_single_platform_fetch():
         games = await client.get_free_games(platforms=["steam"])
 
     assert all(g.platform == "steam" for g in games)
+
+
+async def test_worth_parsed_correctly():
+    client = GamerPowerClient()
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, payload=STEAM_RESPONSE)
+        m.get(GP_URL_PATTERN, payload=[])
+        games = await client.get_free_games()
+
+    assert games[0].worth == "$39.99"
+
+
+async def test_worth_na_becomes_none():
+    client = GamerPowerClient()
+    single = [{**STEAM_RESPONSE[0], "worth": "N/A"}]
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, payload=single)
+        m.get(GP_URL_PATTERN, payload=[])
+        games = await client.get_free_games()
+
+    assert games[0].worth is None
+
+
+async def test_worth_zero_becomes_none():
+    client = GamerPowerClient()
+    single = [{**STEAM_RESPONSE[0], "worth": "$0.00"}]
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, payload=single)
+        m.get(GP_URL_PATTERN, payload=[])
+        games = await client.get_free_games()
+
+    assert games[0].worth is None
+
+
+async def test_expires_at_parsed_as_datetime():
+    client = GamerPowerClient()
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, payload=STEAM_RESPONSE)
+        m.get(GP_URL_PATTERN, payload=[])
+        games = await client.get_free_games()
+
+    assert isinstance(games[0].expires_at, datetime)
+    assert games[0].expires_at.tzinfo is not None

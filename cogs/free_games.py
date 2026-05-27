@@ -16,8 +16,19 @@ from storage.seen_games import SeenGames
 log = logging.getLogger(__name__)
 
 SEEN_GAMES_PATH = Path("data/seen_games.json")
-EMBED_COLOR = discord.Color(0x2ECC71)
 UPCOMING_COLOR = discord.Color(0xF5A623)
+
+# 每個平台的 Embed 顏色
+PLATFORM_COLORS: dict[str, discord.Color] = {
+    "steam": discord.Color(0x2ECC71),       # 綠
+    "epic-games-store": discord.Color(0x0074E4),  # Epic 藍
+}
+
+# Embed 頂部 author 欄文字
+PLATFORM_AUTHOR: dict[str, str] = {
+    "steam": "🎮 Steam 限時免費",
+    "epic-games-store": "⚡ Epic Games 限時免費",
+}
 
 
 def filter_new_games(games: list[FreeGame], seen_ids: set[str]) -> list[FreeGame]:
@@ -25,11 +36,27 @@ def filter_new_games(games: list[FreeGame], seen_ids: set[str]) -> list[FreeGame
 
 
 def build_embed(game: FreeGame) -> discord.Embed:
-    embed = discord.Embed(title=game.title, url=game.url, color=EMBED_COLOR)
+    color = PLATFORM_COLORS.get(game.platform, discord.Color(0x2ECC71))
+    embed = discord.Embed(title=game.title, url=game.url, color=color)
+    embed.set_author(name=PLATFORM_AUTHOR.get(game.platform, "🎮 限時免費"))
+
     if game.image_url:
         embed.set_image(url=game.image_url)
+
+    if game.worth:
+        embed.add_field(name="💰 原價", value=game.worth, inline=True)
+
     if game.expires_at:
-        embed.add_field(name="⏰ 到期時間", value=game.expires_at, inline=False)
+        embed.add_field(
+            name="⏰ 限免截止",
+            value=(
+                discord.utils.format_dt(game.expires_at, style="F")
+                + "\n"
+                + discord.utils.format_dt(game.expires_at, style="R")
+            ),
+            inline=True,
+        )
+
     embed.set_footer(text="資料來源：GamerPower")
     return embed
 
