@@ -23,19 +23,26 @@ class FreeGame:
     expires_at: datetime | None
     platform: str
     worth: str | None          # 原價，例如 "$49.99"；無資料時為 None
+    kind: str = "game"         # "game" 或 "dlc"
 
 
 class GamerPowerClient:
-    async def get_free_games(self, platforms: list[str] | None = None) -> list[FreeGame]:
+    async def get_free_games(
+        self,
+        platforms: list[str] | None = None,
+        include_dlc: bool = False,
+    ) -> list[FreeGame]:
         if platforms is None:
             platforms = ["steam", "epic-games-store"]
         results: list[FreeGame] = []
         for platform in platforms:
-            results.extend(await self._fetch_platform(platform))
+            results.extend(await self._fetch_platform(platform, "game"))
+            if include_dlc:
+                results.extend(await self._fetch_platform(platform, "loot"))
         return results
 
-    async def _fetch_platform(self, platform: str) -> list[FreeGame]:
-        params = {"platform": platform, "type": "game"}
+    async def _fetch_platform(self, platform: str, api_type: str = "game") -> list[FreeGame]:
+        params = {"platform": platform, "type": api_type}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -44,26 +51,28 @@ class GamerPowerClient:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
-                        log.warning("GamerPower API 回傳 HTTP %s (platform=%s)，跳過", resp.status, platform)
+                        log.warning("GamerPower API 回傳 HTTP %s (platform=%s, type=%s)，跳過", resp.status, platform, api_type)
                         return []
                     data = await resp.json()
         except aiohttp.ClientError as exc:
-            log.warning("GamerPower API 請求失敗 (platform=%s)：%s", platform, exc)
+            log.warning("GamerPower API 請求失敗 (platform=%s, type=%s)：%s", platform, api_type, exc)
             return []
 
         if not isinstance(data, list):
             log.warning("GamerPower API 回傳非預期格式 (platform=%s)", platform)
             return []
 
-        return [self._parse(item, platform) for item in data if self._is_valid(item)]
+        kind = "game" if api_type == "game" else "dlc"
+        return [self._parse(item, platform, kind) for item in data if self._is_valid(item, api_type)]
 
-    def _is_valid(self, item: dict) -> bool:
-        return (
-            item.get("status") == "Active"
-            and item.get("type") == "Game"
-        )
+    def _is_valid(self, item: dict, api_type: str = "game") -> bool:
+        if item.get("status") != "Active":
+            return False
+        if api_type == "game":
+            return item.get("type") == "Game"
+        return item.get("type") != "Game"  # loot：非完整遊戲的項目
 
-    def _parse(self, item: dict, platform: str) -> FreeGame:
+    def _parse(self, item: dict, platform: str, kind: str = "game") -> FreeGame:
         return FreeGame(
             id=str(item["id"]),
             title=item.get("title", ""),
@@ -72,6 +81,7 @@ class GamerPowerClient:
             expires_at=self._parse_date(item.get("end_date")),
             platform=platform,
             worth=self._parse_worth(item.get("worth")),
+            kind=kind,
         )
 
     @staticmethod

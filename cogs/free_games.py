@@ -11,6 +11,7 @@ from services.emoji_setup import EMOJI_NAMES
 from services.epic_client import EpicClient, UpcomingGame
 from services.gamerpower_client import FreeGame, GamerPowerClient, PLATFORM_LABELS
 from storage.guild_channels import GuildChannels
+from storage.guild_dlc import GuildDLC
 from storage.guild_platforms import GuildPlatforms
 from storage.guild_roles import GuildRoles
 from storage.seen_games import SeenGames
@@ -48,13 +49,14 @@ def build_embed(game: FreeGame, emoji_ids: dict[str, int] | None = None) -> disc
 
     # Author 欄：有 Application Emoji 時用品牌 Logo 作為 icon，否則用 Unicode emoji
     emoji_id = (emoji_ids or {}).get(game.platform)
+    dlc_suffix = " (DLC)" if game.kind == "dlc" else ""
     if emoji_id:
         embed.set_author(
-            name=PLATFORM_AUTHOR_TEXT.get(game.platform, "限時免費"),
+            name=PLATFORM_AUTHOR_TEXT.get(game.platform, "限時免費") + dlc_suffix,
             icon_url=f"https://cdn.discordapp.com/emojis/{emoji_id}.png",
         )
     else:
-        embed.set_author(name=PLATFORM_AUTHOR_FALLBACK.get(game.platform, "🎮 限時免費"))
+        embed.set_author(name=PLATFORM_AUTHOR_FALLBACK.get(game.platform, "🎮 限時免費") + dlc_suffix)
 
     if game.image_url:
         embed.set_image(url=game.image_url)
@@ -151,6 +153,7 @@ class FreeGamesCog(commands.Cog):
         self._guild_channels = GuildChannels()
         self._guild_roles = GuildRoles()
         self._guild_platforms = GuildPlatforms()
+        self._guild_dlc = GuildDLC()
         self._last_check: datetime | None = None
         self._check_lock = asyncio.Lock()
         self.check_free_games.start()
@@ -176,10 +179,13 @@ class FreeGamesCog(commands.Cog):
                 return
 
             needed_platforms: set[str] = set()
+            need_dlc = False
             for guild_id, _ in guild_items:
                 needed_platforms.update(self._guild_platforms.get(guild_id))
+                if self._guild_dlc.get(guild_id):
+                    need_dlc = True
 
-            games = await self._client.get_free_games(list(needed_platforms))
+            games = await self._client.get_free_games(list(needed_platforms), include_dlc=need_dlc)
             if not games:
                 log.info("目前無免費遊戲，跳過")
                 self._last_check = datetime.now(timezone.utc)
@@ -194,10 +200,13 @@ class FreeGamesCog(commands.Cog):
                     continue
 
                 guild_platforms = self._guild_platforms.get(guild_id)
+                guild_include_dlc = self._guild_dlc.get(guild_id)
                 guild_seen = self._seen.seen_ids(guild_id)
                 guild_games = [
                     g for g in games
-                    if g.platform in guild_platforms and g.id not in guild_seen
+                    if g.platform in guild_platforms
+                    and g.id not in guild_seen
+                    and (g.kind == "game" or guild_include_dlc)
                 ]
                 if not guild_games:
                     continue
@@ -292,6 +301,10 @@ class FreeGamesCog(commands.Cog):
         platform_text = " + ".join(PLATFORM_LABELS.get(p, p) for p in platforms)
         embed.add_field(name="🎮 監控平台", value=platform_text, inline=True)
 
+        # DLC 設定
+        dlc_enabled = self._guild_dlc.get(interaction.guild_id)
+        embed.add_field(name="📦 DLC 通知", value="✅ 開啟" if dlc_enabled else "❌ 關閉", inline=True)
+
         # 上次 / 下次檢查時間
         if self._last_check:
             last_text = discord.utils.format_dt(self._last_check, style="R")
@@ -372,6 +385,24 @@ class FreeGamesCog(commands.Cog):
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message("❌ 需要「管理伺服器」權限才能設定通知平台。", ephemeral=True)
 
+    # ── /setdlc ───────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="setdlc", description="設定是否接收 DLC / 遊戲內容物通知（需管理員權限）")
+    @app_commands.describe(enabled="開啟後會一併通知 DLC 及遊戲內容物")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setdlc(self, interaction: discord.Interaction, enabled: bool):
+        self._guild_dlc.set(interaction.guild_id, enabled)
+        status = "✅ 已開啟" if enabled else "❌ 已關閉"
+        await interaction.response.send_message(
+            f"{status} DLC / 遊戲內容物通知。", ephemeral=True
+        )
+        log.info("伺服器 %s 設定 DLC 通知 %s", interaction.guild_id, enabled)
+
+    @setdlc.error
+    async def setdlc_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ 需要「管理伺服器」權限才能設定 DLC 通知。", ephemeral=True)
+
     # ── /upcoming ─────────────────────────────────────────────────────────────
 
     @app_commands.command(name="upcoming", description="查詢 Epic Games 即將免費的遊戲")
@@ -435,6 +466,15 @@ class FreeGamesCog(commands.Cog):
                 "・**Steam + Epic Games**（預設，全部）\n"
                 "・**僅 Steam**\n"
                 "・**僅 Epic Games**\n"
+                "🔒 需要「管理伺服器」權限。"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📦 `/setdlc [true/false]`",
+            value=(
+                "開啟或關閉 DLC / 遊戲內容物通知。\n"
+                "預設**關閉**（只通知完整遊戲）。\n"
                 "🔒 需要「管理伺服器」權限。"
             ),
             inline=False,

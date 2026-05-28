@@ -7,6 +7,7 @@ import pytest
 from services.gamerpower_client import FreeGame
 from cogs.free_games import FreeGamesCog, filter_new_games, build_embed, build_view
 from storage.guild_channels import GuildChannels
+from storage.guild_dlc import GuildDLC
 from storage.guild_roles import GuildRoles
 from storage.guild_platforms import GuildPlatforms
 from storage.seen_games import SeenGames
@@ -177,6 +178,7 @@ def _make_cog(tmp_path) -> FreeGamesCog:
     cog._guild_channels = GuildChannels(tmp_path / "channels.json")
     cog._guild_roles = GuildRoles(tmp_path / "roles.json")
     cog._guild_platforms = GuildPlatforms(tmp_path / "platforms.json")
+    cog._guild_dlc = GuildDLC(tmp_path / "dlc.json")
     cog._last_check = None
     cog._check_lock = asyncio.Lock()
     return cog
@@ -256,6 +258,46 @@ async def test_do_check_tracks_seen_per_guild_independently(tmp_path):
     good_channel.send.assert_called_once()
     assert "A" not in cog._seen.seen_ids(1)  # 失敗的 guild 不標 seen
     assert "A" in cog._seen.seen_ids(2)       # 成功的 guild 標 seen
+
+
+async def test_do_check_excludes_dlc_by_default(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    dlc_game = make_game("DLC1", platform="steam")
+    dlc_game = FreeGame(
+        id="DLC1", title="DLC Pack", url="https://store.steampowered.com/app/DLC1/",
+        image_url="", expires_at=None, platform="steam", worth=None, kind="dlc"
+    )
+    full_game = make_game("G1", platform="steam")
+    cog._client.get_free_games.return_value = [full_game, dlc_game]
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    assert channel.send.call_count == 1
+    assert "G1" in cog._seen.seen_ids(1)
+    assert "DLC1" not in cog._seen.seen_ids(1)
+
+
+async def test_do_check_includes_dlc_when_enabled(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_dlc.set(1, True)
+    dlc_game = FreeGame(
+        id="DLC1", title="DLC Pack", url="https://store.steampowered.com/app/DLC1/",
+        image_url="", expires_at=None, platform="steam", worth=None, kind="dlc"
+    )
+    full_game = make_game("G1", platform="steam")
+    cog._client.get_free_games.return_value = [full_game, dlc_game]
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    assert channel.send.call_count == 2
+    assert "G1" in cog._seen.seen_ids(1)
+    assert "DLC1" in cog._seen.seen_ids(1)
 
 
 async def test_do_check_skips_when_lock_held(tmp_path):
