@@ -1,9 +1,15 @@
+import asyncio
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
 from services.gamerpower_client import FreeGame
-from cogs.free_games import filter_new_games, build_embed, build_view
+from cogs.free_games import FreeGamesCog, filter_new_games, build_embed, build_view
+from storage.guild_channels import GuildChannels
+from storage.guild_roles import GuildRoles
+from storage.guild_platforms import GuildPlatforms
+from storage.seen_games import SeenGames
 
 EXPIRY = datetime(2026, 6, 1, 17, 0, 0, tzinfo=timezone.utc)
 
@@ -155,3 +161,157 @@ def test_view_no_button_when_no_url():
                     expires_at=None, platform="steam", worth=None)
     view = build_view(game)
     assert len(view.children) == 0
+
+
+# --- _do_check() ---
+
+def _make_cog(tmp_path) -> FreeGamesCog:
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+    cog = object.__new__(FreeGamesCog)
+    cog._bot = bot
+    cog._emoji_ids = {}
+    cog._client = AsyncMock()
+    cog._epic_client = AsyncMock()
+    cog._seen = SeenGames(tmp_path / "seen.json")
+    cog._guild_channels = GuildChannels(tmp_path / "channels.json")
+    cog._guild_roles = GuildRoles(tmp_path / "roles.json")
+    cog._guild_platforms = GuildPlatforms(tmp_path / "platforms.json")
+    cog._last_check = None
+    cog._check_lock = asyncio.Lock()
+    return cog
+
+
+def _http_error() -> discord.HTTPException:
+    resp = MagicMock()
+    resp.status = 403
+    return discord.HTTPException(resp, "Missing Permissions")
+
+
+async def test_do_check_marks_all_sent_games_as_seen(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._client.get_free_games.return_value = [make_game("A"), make_game("B")]
+    cog._bot.get_channel.return_value = AsyncMock()
+
+    await cog._do_check()
+
+    assert "A" in cog._seen.seen_ids(1)
+    assert "B" in cog._seen.seen_ids(1)
+
+
+async def test_do_check_only_marks_successful_sends_as_seen(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._client.get_free_games.return_value = [make_game("A"), make_game("B")]
+
+    channel = AsyncMock()
+    channel.send.side_effect = [None, _http_error()]
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    assert "A" in cog._seen.seen_ids(1)
+    assert "B" not in cog._seen.seen_ids(1)
+
+
+async def test_do_check_skips_missing_channel_without_crash(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._client.get_free_games.return_value = [make_game("A")]
+    cog._bot.get_channel.return_value = None
+
+    await cog._do_check()
+
+    assert "A" not in cog._seen.seen_ids(1)
+
+
+async def test_do_check_skips_when_no_guilds(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._client.get_free_games.return_value = [make_game("A")]
+
+    await cog._do_check()
+
+    cog._client.get_free_games.assert_not_called()
+    assert "A" not in cog._seen.seen_ids(1)
+
+
+async def test_do_check_tracks_seen_per_guild_independently(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_channels.set(2, 200)
+    cog._client.get_free_games.return_value = [make_game("A")]
+
+    bad_channel = AsyncMock()
+    bad_channel.send.side_effect = _http_error()
+    good_channel = AsyncMock()
+
+    def get_channel(cid):
+        return bad_channel if cid == 100 else good_channel
+
+    cog._bot.get_channel.side_effect = get_channel
+
+    await cog._do_check()
+
+    good_channel.send.assert_called_once()
+    assert "A" not in cog._seen.seen_ids(1)  # 失敗的 guild 不標 seen
+    assert "A" in cog._seen.seen_ids(2)       # 成功的 guild 標 seen
+
+
+async def test_do_check_skips_when_lock_held(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._client.get_free_games.return_value = [make_game("A")]
+
+    async with cog._check_lock:
+        await cog._do_check()
+
+    cog._client.get_free_games.assert_not_called()
+
+
+async def test_do_check_migrates_using_bot_guilds_not_channels(tmp_path):
+    import json
+    cog = _make_cog(tmp_path)
+    # 沒有設定任何頻道，但 bot.guilds 有 guild 42
+    mock_guild = MagicMock()
+    mock_guild.id = 42
+    cog._bot.guilds = [mock_guild]
+
+    seen_path = tmp_path / "seen.json"
+    seen_path.write_text(json.dumps({"seen_ids": ["A"]}))
+    from storage.seen_games import SeenGames
+    cog._seen = SeenGames(seen_path)
+
+    await cog._do_check()
+
+    # channel 未設定所以早退，但 migration 應已完成
+    assert "A" in cog._seen.seen_ids(42)
+    assert not cog._seen.needs_migration()
+
+
+async def test_do_check_migrates_legacy_before_filtering(tmp_path):
+    import json
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+
+    # 設定 bot.guilds，讓 migration 能套用到 guild 1
+    mock_guild = MagicMock()
+    mock_guild.id = 1
+    cog._bot.guilds = [mock_guild]
+
+    # game-A 已在舊格式 seen_ids 中
+    seen_path = tmp_path / "seen.json"
+    seen_path.write_text(json.dumps({"seen_ids": ["A"]}))
+    from storage.seen_games import SeenGames
+    cog._seen = SeenGames(seen_path)
+
+    cog._client.get_free_games.return_value = [make_game("A"), make_game("B")]
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    # A 因舊格式遷移視為已見過，不應重發；B 應發送
+    assert channel.send.call_count == 1
+    assert "A" in cog._seen.seen_ids(1)  # 已遷移
+    assert "B" in cog._seen.seen_ids(1)  # 新發送

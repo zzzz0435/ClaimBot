@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from storage.seen_games import SeenGames
 log = logging.getLogger(__name__)
 
 SEEN_GAMES_PATH = Path("data/seen_games.json")
+EMBED_COLOR = discord.Color(0x2ECC71)       # Bot 通用顏色（/status、/help）
 UPCOMING_COLOR = discord.Color(0xF5A623)
 
 # 每個平台的 Embed 顏色
@@ -150,6 +152,7 @@ class FreeGamesCog(commands.Cog):
         self._guild_roles = GuildRoles()
         self._guild_platforms = GuildPlatforms()
         self._last_check: datetime | None = None
+        self._check_lock = asyncio.Lock()
         self.check_free_games.start()
 
     def cog_unload(self):
@@ -157,62 +160,95 @@ class FreeGamesCog(commands.Cog):
 
     @tasks.loop(hours=6)
     async def check_free_games(self):
-        guild_items = self._guild_channels.all_items()
-        if not guild_items:
-            log.info("尚未有任何伺服器設定頻道，跳過")
+        await self._do_check()
+
+    async def _do_check(self):
+        if self._check_lock.locked():
+            log.info("檢查已在進行中，跳過")
             return
+        async with self._check_lock:
+            if self._seen.needs_migration():
+                self._seen.migrate([g.id for g in self._bot.guilds])
 
-        needed_platforms: set[str] = set()
-        for guild_id, _ in guild_items:
-            needed_platforms.update(self._guild_platforms.get(guild_id))
+            guild_items = self._guild_channels.all_items()
+            if not guild_items:
+                log.info("尚未有任何伺服器設定頻道，跳過")
+                return
 
-        games = await self._client.get_free_games(list(needed_platforms))
-        new_games = filter_new_games(games, self._seen.seen_ids)
+            needed_platforms: set[str] = set()
+            for guild_id, _ in guild_items:
+                needed_platforms.update(self._guild_platforms.get(guild_id))
 
-        if not new_games:
-            log.info("無新免費遊戲，跳過")
+            games = await self._client.get_free_games(list(needed_platforms))
+            if not games:
+                log.info("目前無免費遊戲，跳過")
+                self._last_check = datetime.now(timezone.utc)
+                return
+
+            total_sent = 0
+
+            for guild_id, channel_id in guild_items:
+                channel = self._bot.get_channel(channel_id)
+                if channel is None:
+                    log.warning("找不到頻道 ID %s，跳過", channel_id)
+                    continue
+
+                guild_platforms = self._guild_platforms.get(guild_id)
+                guild_seen = self._seen.seen_ids(guild_id)
+                guild_games = [
+                    g for g in games
+                    if g.platform in guild_platforms and g.id not in guild_seen
+                ]
+                if not guild_games:
+                    continue
+
+                role_id = self._guild_roles.get(guild_id)
+                content = f"<@&{role_id}>" if role_id else None
+                newly_seen: set[str] = set()
+
+                for game in guild_games:
+                    try:
+                        await channel.send(
+                            content=content,
+                            embed=build_embed(game, self._emoji_ids),
+                            view=build_view(game, self._emoji_ids),
+                        )
+                        newly_seen.add(game.id)
+                        total_sent += 1
+                    except discord.HTTPException as e:
+                        log.error(
+                            "發送失敗 guild=%s channel=%s game=%s: %s",
+                            guild_id, channel_id, game.id, e,
+                        )
+
+                if newly_seen:
+                    self._seen.add(guild_id, newly_seen)
+
             self._last_check = datetime.now(timezone.utc)
-            return
-
-        total_sent = 0
-        for guild_id, channel_id in guild_items:
-            channel = self._bot.get_channel(channel_id)
-            if channel is None:
-                log.warning("找不到頻道 ID %s，跳過", channel_id)
-                continue
-
-            guild_platforms = self._guild_platforms.get(guild_id)
-            guild_games = [g for g in new_games if g.platform in guild_platforms]
-            if not guild_games:
-                continue
-
-            role_id = self._guild_roles.get(guild_id)
-            content = f"<@&{role_id}>" if role_id else None
-
-            for game in guild_games:
-                await channel.send(content=content, embed=build_embed(game, self._emoji_ids), view=build_view(game, self._emoji_ids))
-                total_sent += 1
-
-        self._seen.add({g.id for g in new_games})
-        self._last_check = datetime.now(timezone.utc)
-        log.info("已發送 %d 則通知，新遊戲 %d 款至 %d 個伺服器", total_sent, len(new_games), len(guild_items))
+            log.info("已發送 %d 則通知至 %d 個伺服器", total_sent, len(guild_items))
 
     @check_free_games.before_loop
     async def before_check(self):
         await self._bot.wait_until_ready()
 
-    @commands.Cog.listener()
-    async def on_guild_join(self, guild: discord.Guild):
+    async def initialize_guild(self, guild: discord.Guild) -> None:
+        if self._guild_channels.has(guild.id):
+            return
         channel = await self._setup_channel(guild)
         if channel:
             self._guild_channels.set(guild.id, channel.id)
-            await channel.send(
-                "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 及 Epic Games 限時免費遊戲。\n"
-                "可用指令：`/freegames` 手動查詢、`/upcoming` 即將免費、"
-                "`/setchannel` 設定頻道、`/setrole` 設定通知身份組、`/setplatforms` 設定平台 🎮\n"
-                "輸入 `/help` 查看所有指令說明。"
-            )
+            try:
+                await channel.send(
+                    "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 及 Epic Games 限時免費遊戲。\n"
+                    "輸入 `/help` 查看所有指令說明 🎮"
+                )
+            except discord.HTTPException as e:
+                log.warning("在伺服器 %s 發送歡迎訊息失敗: %s", guild.name, e)
             log.info("已在伺服器 %s 建立頻道 %s", guild.name, channel.name)
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        await self.initialize_guild(guild)
 
     async def _setup_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
         existing = discord.utils.get(guild.text_channels, name="免費遊戲")
@@ -234,7 +270,7 @@ class FreeGamesCog(commands.Cog):
         embed = discord.Embed(title="📊 ClaimBot 狀態", color=EMBED_COLOR)
 
         # 通知頻道
-        channel_id = self._guild_channels._channels.get(str(interaction.guild_id))
+        channel_id = self._guild_channels.get(interaction.guild_id)
         if channel_id:
             ch = self._bot.get_channel(channel_id)
             channel_text = ch.mention if ch else f"⚠️ 頻道已失效（ID: {channel_id}）"
@@ -403,8 +439,27 @@ class FreeGamesCog(commands.Cog):
             ),
             inline=False,
         )
+        embed.add_field(
+            name="⚡ `/checknow`",
+            value="立即觸發免費遊戲檢查，不等下次排程。\n🔒 需要「管理伺服器」權限。",
+            inline=False,
+        )
         embed.set_footer(text="Bot 每 6 小時自動檢查一次新遊戲")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /checknow ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="checknow", description="立即觸發免費遊戲檢查並發送通知（需管理員權限）")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def checknow(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await self._do_check()
+        await interaction.followup.send("✅ 檢查完成，有新遊戲的話已發送通知。", ephemeral=True)
+
+    @checknow.error
+    async def checknow_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ 需要「管理伺服器」權限才能執行此指令。", ephemeral=True)
 
     # ── /freegames ────────────────────────────────────────────────────────────
 
@@ -412,7 +467,7 @@ class FreeGamesCog(commands.Cog):
     async def freegames(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        channel_id = self._guild_channels._channels.get(str(interaction.guild_id))
+        channel_id = self._guild_channels.get(interaction.guild_id)
         target = self._bot.get_channel(channel_id) if channel_id else None
 
         if target is None:
@@ -429,7 +484,19 @@ class FreeGamesCog(commands.Cog):
         role_id = self._guild_roles.get(interaction.guild_id)
         content = f"<@&{role_id}>" if role_id else None
 
+        sent = 0
         for game in games:
-            await target.send(content=content, embed=build_embed(game, self._emoji_ids), view=build_view(game, self._emoji_ids))
+            try:
+                await target.send(
+                    content=content,
+                    embed=build_embed(game, self._emoji_ids),
+                    view=build_view(game, self._emoji_ids),
+                )
+                sent += 1
+            except discord.HTTPException as e:
+                log.error("手動發送失敗 channel=%s game=%s: %s", target.id, game.id, e)
 
-        await interaction.followup.send(f"✅ 已發送至 {target.mention}", ephemeral=True)
+        if sent:
+            await interaction.followup.send(f"✅ 已發送 {sent} 款遊戲至 {target.mention}", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ 發送失敗，請確認 Bot 在該頻道有發訊息的權限。", ephemeral=True)

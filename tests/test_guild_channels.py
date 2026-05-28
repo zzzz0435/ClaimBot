@@ -36,3 +36,25 @@ def test_resets_on_corrupt_file(tmp_path):
     path.write_text("{{invalid}}")
     gc = GuildChannels(path)
     assert gc.all_channels() == []
+
+
+def test_get_returns_channel_id(tmp_path):
+    gc = GuildChannels(tmp_path / "gc.json")
+    gc.set(guild_id=111, channel_id=999)
+    assert gc.get(111) == 999
+
+
+def test_get_returns_none_when_not_set(tmp_path):
+    gc = GuildChannels(tmp_path / "gc.json")
+    assert gc.get(111) is None
+
+
+def test_has_returns_true_when_set(tmp_path):
+    gc = GuildChannels(tmp_path / "gc.json")
+    gc.set(guild_id=111, channel_id=999)
+    assert gc.has(111) is True
+
+
+def test_has_returns_false_when_not_set(tmp_path):
+    gc = GuildChannels(tmp_path / "gc.json")
+    assert gc.has(111) is False

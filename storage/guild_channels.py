@@ -35,6 +35,12 @@ class GuildChannels:
         self._channels[str(guild_id)] = channel_id
         self._write(self._channels)
 
+    def get(self, guild_id: int) -> int | None:
+        return self._channels.get(str(guild_id))
+
+    def has(self, guild_id: int) -> bool:
+        return str(guild_id) in self._channels
+
     def all_channels(self) -> list[int]:
         return list(self._channels.values())
 

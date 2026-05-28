@@ -18,45 +18,50 @@ log = logging.getLogger(__name__)
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+class ClaimBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=discord.Intents.default())
+        self._ready_done = False
+
+    async def setup_hook(self):
+        emoji_setup = EmojiSetup(application_id=str(self.application_id), token=TOKEN)
+        emoji_ids = await emoji_setup.ensure_emojis()
+        if emoji_ids:
+            log.info("Application Emoji 就緒：%s", list(emoji_ids.keys()))
+        else:
+            log.info("未設定 Application Emoji，使用 Unicode emoji fallback")
+
+        cog = FreeGamesCog(self, emoji_ids=emoji_ids)
+        await self.add_cog(cog)
+        await self.tree.sync()
+        log.info("Slash commands 全域同步完成")
+
+    async def on_ready(self):
+        cog: FreeGamesCog | None = self.cogs.get("FreeGamesCog")  # type: ignore
+
+        if not self._ready_done:
+            log.info("Bot 已上線：%s", self.user)
+            if cog and cog._seen.needs_migration():
+                cog._seen.migrate([g.id for g in self.guilds])
+            for guild in self.guilds:
+                try:
+                    self.tree.clear_commands(guild=guild)
+                    await self.tree.sync(guild=guild)
+                    log.info("Guild %s 專屬指令已清除", guild.name)
+                except Exception as e:
+                    log.error("Guild %s 指令清除失敗: %s", guild.name, e)
+            self._ready_done = True
+        else:
+            log.info("Bot 重新連線：%s", self.user)
+
+        for guild in self.guilds:
+            try:
+                if cog:
+                    await cog.initialize_guild(guild)
+            except Exception as e:
+                log.error("Guild %s 初始化失敗: %s", guild.name, e)
 
 
-@bot.event
-async def on_ready():
-    log.info("Bot 已上線：%s", bot.user)
-
-    # 上傳 / 確認 Application Emoji（需要 assets/steam.png 和 assets/epic.png）
-    emoji_setup = EmojiSetup(application_id=str(bot.application_id), token=TOKEN)
-    emoji_ids = await emoji_setup.ensure_emojis()
-    if emoji_ids:
-        log.info("Application Emoji 就緒：%s", list(emoji_ids.keys()))
-    else:
-        log.info("未設定 Application Emoji，使用 Unicode emoji fallback")
-
-    cog = FreeGamesCog(bot, emoji_ids=emoji_ids)
-    await bot.add_cog(cog)
-
-    # 全域同步（最長 1 小時生效）
-    await bot.tree.sync()
-    log.info("Slash commands 全域同步完成")
-
-    # 對每個已加入的伺服器做即時同步（立即生效）
-    for guild in bot.guilds:
-        bot.tree.copy_global_to(guild=guild)
-        await bot.tree.sync(guild=guild)
-        log.info("Guild %s slash commands 即時同步完成", guild.name)
-
-    for guild in bot.guilds:
-        if guild.id not in [int(gid) for gid in cog._guild_channels._channels]:
-            channel = await cog._setup_channel(guild)
-            if channel:
-                cog._guild_channels.set(guild.id, channel.id)
-                await channel.send(
-                    "👋 嗨！我是 **ClaimBot**，我會在這裡通知你 Steam 及 Epic Games 限時免費遊戲。\n"
-                    "輸入 `/help` 查看所有指令說明 🎮"
-                )
-                log.info("已在伺服器 %s 建立頻道 %s", guild.name, channel.name)
-
-
+bot = ClaimBot()
 bot.run(TOKEN)
