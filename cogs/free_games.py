@@ -10,17 +10,21 @@ from discord.ext import commands, tasks
 from services.emoji_setup import EMOJI_NAMES
 from services.epic_client import EpicClient, UpcomingGame
 from services.gamerpower_client import FreeGame, GamerPowerClient, PLATFORM_LABELS
+from services.itad_client import ITADClient, PriceDeal
 from storage.guild_channels import GuildChannels
 from storage.guild_dlc import GuildDLC
 from storage.guild_platforms import GuildPlatforms
+from storage.guild_price_alerts import GuildPriceAlerts
 from storage.guild_roles import GuildRoles
 from storage.seen_games import SeenGames
+from storage.seen_price_lows import SeenPriceLows
 
 log = logging.getLogger(__name__)
 
 SEEN_GAMES_PATH = Path("data/seen_games.json")
 EMBED_COLOR = discord.Color(0x2ECC71)       # Bot 通用顏色（/status、/help）
 UPCOMING_COLOR = discord.Color(0xF5A623)
+PRICE_LOW_COLOR = discord.Color(0xF0A500)   # 歷史新低通知
 
 # 每個平台的 Embed 顏色
 PLATFORM_COLORS: dict[str, discord.Color] = {
@@ -143,17 +147,61 @@ def build_upcoming_view(game: UpcomingGame) -> discord.ui.View:
     return view
 
 
+def build_price_embed(deal: PriceDeal) -> discord.Embed:
+    embed = discord.Embed(title=deal.title, url=deal.url, color=PRICE_LOW_COLOR)
+    embed.set_author(name="📉 Steam 歷史新低")
+    if deal.image_url:
+        embed.set_image(url=deal.image_url)
+    embed.add_field(
+        name="💰 目前售價",
+        value=f"**{deal.currency} {deal.current_price:.2f}** (-{deal.discount_pct}%)",
+        inline=True,
+    )
+    embed.add_field(
+        name="📉 歷史最低",
+        value=f"{deal.currency} {deal.historical_low:.2f}",
+        inline=True,
+    )
+    embed.add_field(
+        name="🔖 原價",
+        value=f"{deal.currency} {deal.original_price:.2f}",
+        inline=True,
+    )
+    embed.set_footer(text="資料來源：IsThereAnyDeal")
+    return embed
+
+
+def build_price_view(deal: PriceDeal) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    if deal.url:
+        view.add_item(discord.ui.Button(
+            label="在 Steam 購買",
+            url=deal.url,
+            emoji="🛒",
+            style=discord.ButtonStyle.link,
+        ))
+    return view
+
+
 class FreeGamesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, emoji_ids: dict[str, int] | None = None):
+    def __init__(
+        self,
+        bot: commands.Bot,
+        emoji_ids: dict[str, int] | None = None,
+        itad_key: str | None = None,
+    ):
         self._bot = bot
         self._emoji_ids: dict[str, int] = emoji_ids or {}
         self._client = GamerPowerClient()
         self._epic_client = EpicClient()
+        self._itad_client = ITADClient(itad_key) if itad_key else None
         self._seen = SeenGames(SEEN_GAMES_PATH)
         self._guild_channels = GuildChannels()
         self._guild_roles = GuildRoles()
         self._guild_platforms = GuildPlatforms()
         self._guild_dlc = GuildDLC()
+        self._guild_price_alerts = GuildPriceAlerts()
+        self._seen_price_lows = SeenPriceLows()
         self._last_check: datetime | None = None
         self._check_lock = asyncio.Lock()
         self.check_free_games.start()
@@ -187,9 +235,7 @@ class FreeGamesCog(commands.Cog):
 
             games = await self._client.get_free_games(list(needed_platforms), include_dlc=need_dlc)
             if not games:
-                log.info("目前無免費遊戲，跳過")
-                self._last_check = datetime.now(timezone.utc)
-                return
+                log.info("目前無免費遊戲")
 
             total_sent = 0
 
@@ -233,8 +279,44 @@ class FreeGamesCog(commands.Cog):
                 if newly_seen:
                     self._seen.add(guild_id, newly_seen)
 
+            await self._check_price_lows(guild_items)
+
             self._last_check = datetime.now(timezone.utc)
             log.info("已發送 %d 則通知至 %d 個伺服器", total_sent, len(guild_items))
+
+    async def _check_price_lows(self, guild_items: list[tuple[int, int]]) -> None:
+        if self._itad_client is None:
+            return
+        alert_guilds = [(gid, cid) for gid, cid in guild_items if self._guild_price_alerts.get(gid)]
+        if not alert_guilds:
+            return
+
+        deals = await self._itad_client.get_steam_historical_lows()
+        if not deals:
+            return
+
+        for guild_id, channel_id in alert_guilds:
+            channel = self._bot.get_channel(channel_id)
+            if channel is None:
+                log.warning("歷史新低通知：找不到頻道 %s，跳過", channel_id)
+                continue
+            role_id = self._guild_roles.get(guild_id)
+            content = f"<@&{role_id}>" if role_id else None
+            for deal in deals:
+                if not self._seen_price_lows.is_new_low(guild_id, deal.id, deal.current_price):
+                    continue
+                try:
+                    await channel.send(
+                        content=content,
+                        embed=build_price_embed(deal),
+                        view=build_price_view(deal),
+                    )
+                    self._seen_price_lows.mark(guild_id, deal.id, deal.current_price)
+                except discord.HTTPException as e:
+                    log.error(
+                        "歷史新低通知發送失敗 guild=%s game=%s: %s",
+                        guild_id, deal.id, e,
+                    )
 
     @check_free_games.before_loop
     async def before_check(self):
@@ -304,6 +386,13 @@ class FreeGamesCog(commands.Cog):
         # DLC 設定
         dlc_enabled = self._guild_dlc.get(interaction.guild_id)
         embed.add_field(name="📦 DLC 通知", value="✅ 開啟" if dlc_enabled else "❌ 關閉", inline=True)
+
+        # 歷史新低通知
+        price_enabled = self._guild_price_alerts.get(interaction.guild_id)
+        price_text = "✅ 開啟" if price_enabled else "❌ 關閉"
+        if price_enabled and self._itad_client is None:
+            price_text += " ⚠️（未設定 ITAD_KEY）"
+        embed.add_field(name="📉 歷史新低通知", value=price_text, inline=True)
 
         # 上次 / 下次檢查時間
         if self._last_check:
@@ -403,6 +492,32 @@ class FreeGamesCog(commands.Cog):
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message("❌ 需要「管理伺服器」權限才能設定 DLC 通知。", ephemeral=True)
 
+    # ── /setpricelow ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="setpricelow", description="設定是否接收 Steam 歷史最低價格通知（需管理員權限）")
+    @app_commands.describe(enabled="開啟後當 Steam 知名遊戲達到歷史新低時會發送通知")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def setpricelow(self, interaction: discord.Interaction, enabled: bool):
+        if self._itad_client is None:
+            await interaction.response.send_message(
+                "❌ 此功能需要在伺服器設定 `ITAD_KEY` 環境變數，請聯絡 Bot 管理員。",
+                ephemeral=True,
+            )
+            return
+        self._guild_price_alerts.set(interaction.guild_id, enabled)
+        status = "✅ 已開啟" if enabled else "❌ 已關閉"
+        await interaction.response.send_message(
+            f"{status} Steam 歷史新低價格通知。\n"
+            "（條件：評論數 ≥ 500 的遊戲，達到 Steam 歷史最低價時通知）",
+            ephemeral=True,
+        )
+        log.info("伺服器 %s 設定歷史新低通知 %s", interaction.guild_id, enabled)
+
+    @setpricelow.error
+    async def setpricelow_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ 需要「管理伺服器」權限才能設定歷史新低通知。", ephemeral=True)
+
     # ── /upcoming ─────────────────────────────────────────────────────────────
 
     @app_commands.command(name="upcoming", description="查詢 Epic Games 即將免費的遊戲")
@@ -476,6 +591,15 @@ class FreeGamesCog(commands.Cog):
                 "開啟或關閉 DLC / 遊戲內容物通知。\n"
                 "預設**關閉**（只通知完整遊戲）。\n"
                 "🔒 需要「管理伺服器」權限。"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📉 `/setpricelow [true/false]`",
+            value=(
+                "開啟或關閉 Steam **歷史新低**價格通知。\n"
+                "條件：評論數 ≥ 500 的知名遊戲，達到 Steam 歷史最低價時通知。\n"
+                "預設**關閉**。🔒 需要「管理伺服器」權限。"
             ),
             inline=False,
         )

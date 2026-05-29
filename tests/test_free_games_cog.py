@@ -5,12 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 from services.gamerpower_client import FreeGame
-from cogs.free_games import FreeGamesCog, filter_new_games, build_embed, build_view
+from services.itad_client import PriceDeal
+from cogs.free_games import FreeGamesCog, filter_new_games, build_embed, build_view, build_price_embed
 from storage.guild_channels import GuildChannels
 from storage.guild_dlc import GuildDLC
+from storage.guild_price_alerts import GuildPriceAlerts
 from storage.guild_roles import GuildRoles
 from storage.guild_platforms import GuildPlatforms
 from storage.seen_games import SeenGames
+from storage.seen_price_lows import SeenPriceLows
 
 EXPIRY = datetime(2026, 6, 1, 17, 0, 0, tzinfo=timezone.utc)
 
@@ -174,14 +177,31 @@ def _make_cog(tmp_path) -> FreeGamesCog:
     cog._emoji_ids = {}
     cog._client = AsyncMock()
     cog._epic_client = AsyncMock()
+    cog._itad_client = None  # 預設停用，避免真實 API 呼叫
     cog._seen = SeenGames(tmp_path / "seen.json")
     cog._guild_channels = GuildChannels(tmp_path / "channels.json")
     cog._guild_roles = GuildRoles(tmp_path / "roles.json")
     cog._guild_platforms = GuildPlatforms(tmp_path / "platforms.json")
     cog._guild_dlc = GuildDLC(tmp_path / "dlc.json")
+    cog._guild_price_alerts = GuildPriceAlerts(tmp_path / "price_alerts.json")
+    cog._seen_price_lows = SeenPriceLows(tmp_path / "price_lows.json")
     cog._last_check = None
     cog._check_lock = asyncio.Lock()
     return cog
+
+
+def _make_price_deal(deal_id: str, price: float = 9.99, store_low: float = 9.99) -> PriceDeal:
+    return PriceDeal(
+        id=deal_id,
+        title=f"Game {deal_id}",
+        url=f"https://store.steampowered.com/app/{deal_id}/",
+        current_price=price,
+        original_price=19.99,
+        currency="USD",
+        historical_low=store_low,
+        discount_pct=50,
+        image_url="https://cdn.akamai.steamstatic.com/steam/apps/12345/header.jpg",
+    )
 
 
 def _http_error() -> discord.HTTPException:
@@ -357,3 +377,120 @@ async def test_do_check_migrates_legacy_before_filtering(tmp_path):
     assert channel.send.call_count == 1
     assert "A" in cog._seen.seen_ids(1)  # 已遷移
     assert "B" in cog._seen.seen_ids(1)  # 新發送
+
+
+# --- build_price_embed ---
+
+def test_price_embed_has_title_and_url():
+    deal = _make_price_deal("1234")
+    embed = build_price_embed(deal)
+    assert embed.title == "Game 1234"
+    assert "1234" in embed.url
+
+
+def test_price_embed_has_price_fields():
+    deal = _make_price_deal("1", price=9.99, store_low=9.99)
+    embed = build_price_embed(deal)
+    field_names = [f.name for f in embed.fields]
+    assert "💰 目前售價" in field_names
+    assert "📉 歷史最低" in field_names
+    assert "🔖 原價" in field_names
+
+
+def test_price_embed_footer():
+    embed = build_price_embed(_make_price_deal("1"))
+    assert "IsThereAnyDeal" in embed.footer.text
+
+
+# --- _check_price_lows (via _do_check) ---
+
+async def test_price_lows_skipped_when_itad_client_none(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_price_alerts.set(1, True)
+    cog._itad_client = None  # 無 ITAD client
+    cog._client.get_free_games.return_value = []
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    # 無 ITAD client 時不應送出任何歷史新低通知
+    channel.send.assert_not_called()
+
+
+async def test_price_lows_sends_new_low(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_price_alerts.set(1, True)
+
+    itad = AsyncMock()
+    itad.get_steam_historical_lows.return_value = [_make_price_deal("P1")]
+    cog._itad_client = itad
+
+    cog._client.get_free_games.return_value = []
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    channel.send.assert_called_once()
+    assert cog._seen_price_lows.is_new_low(1, "P1", 9.99) is False  # 已標記
+
+
+async def test_price_lows_skips_already_notified(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_price_alerts.set(1, True)
+    cog._seen_price_lows.mark(1, "P1", 9.99)  # 已通知過
+
+    itad = AsyncMock()
+    itad.get_steam_historical_lows.return_value = [_make_price_deal("P1", price=9.99)]
+    cog._itad_client = itad
+
+    cog._client.get_free_games.return_value = []
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    channel.send.assert_not_called()
+
+
+async def test_price_lows_notifies_new_record_low(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_price_alerts.set(1, True)
+    cog._seen_price_lows.mark(1, "P1", 9.99)  # 上次通知 9.99
+
+    itad = AsyncMock()
+    itad.get_steam_historical_lows.return_value = [_make_price_deal("P1", price=7.49, store_low=7.49)]
+    cog._itad_client = itad
+
+    cog._client.get_free_games.return_value = []
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    channel.send.assert_called_once()
+    assert cog._seen_price_lows.is_new_low(1, "P1", 7.49) is False  # 更新到 7.49
+
+
+async def test_price_lows_skipped_when_guild_disabled(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    # guild_price_alerts 預設 False，不啟用
+
+    itad = AsyncMock()
+    itad.get_steam_historical_lows.return_value = [_make_price_deal("P1")]
+    cog._itad_client = itad
+
+    cog._client.get_free_games.return_value = []
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+
+    await cog._do_check()
+
+    itad.get_steam_historical_lows.assert_not_called()
+    channel.send.assert_not_called()

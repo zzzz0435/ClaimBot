@@ -17,6 +17,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 TOKEN = os.environ["DISCORD_TOKEN"]
+ITAD_KEY = os.environ.get("ITAD_KEY")  # 可選：無設定則停用歷史新低通知
 
 
 class ClaimBot(commands.Bot):
@@ -32,7 +33,7 @@ class ClaimBot(commands.Bot):
         else:
             log.info("未設定 Application Emoji，使用 Unicode emoji fallback")
 
-        cog = FreeGamesCog(self, emoji_ids=emoji_ids)
+        cog = FreeGamesCog(self, emoji_ids=emoji_ids, itad_key=ITAD_KEY)
         await self.add_cog(cog)
         await self.tree.sync()
         log.info("Slash commands 全域同步完成")
