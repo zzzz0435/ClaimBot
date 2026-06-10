@@ -2,6 +2,8 @@ import json
 import logging
 from pathlib import Path
 
+from storage.json_io import atomic_write_json, backup_corrupt
+
 log = logging.getLogger(__name__)
 
 GUILD_CHANNELS_PATH = Path("data/guild_channels.json")
@@ -20,16 +22,13 @@ class GuildChannels:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             return {str(k): int(v) for k, v in data.items()}
         except (json.JSONDecodeError, ValueError):
-            log.error("guild_channels.json 格式損毀，重置")
+            log.error("guild_channels.json 格式損毀，備份後重置")
+            backup_corrupt(self._path)
             self._write({})
             return {}
 
     def _write(self, channels: dict[str, int]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(channels, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._path, channels)
 
     def set(self, guild_id: int, channel_id: int) -> None:
         self._channels[str(guild_id)] = channel_id

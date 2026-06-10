@@ -1,5 +1,12 @@
+import asyncio
+import re
+
 import pytest
+from aioresponses import aioresponses
 from services.itad_client import ITADClient, PriceDeal, _extract_steam_appid
+
+ITAD_DEALS_PATTERN = re.compile(r"https://api\.isthereanydeal\.com/deals/v2.*")
+STEAMSPY_PATTERN = re.compile(r"https://steamspy\.com/api\.php.*")
 
 
 # --- _extract_steam_appid ---
@@ -79,3 +86,60 @@ def test_not_at_historical_low_when_free():
 def test_not_at_historical_low_when_store_low_zero():
     client = ITADClient("fake_key")
     assert client._is_at_historical_low(_make_deal(9.99, 0.0)) is False
+
+
+# --- get_steam_historical_lows 整合測試 ---
+
+def _make_api_deal(game_id: str, appid: str) -> dict:
+    return {
+        "game": {"id": game_id, "title": f"Game {game_id}"},
+        "deal": {
+            "price": {"amount": 9.99, "currency": "USD"},
+            "regular": {"amount": 19.99, "currency": "USD"},
+            "cut": 50,
+            "storeLow": 9.99,
+            "url": f"https://store.steampowered.com/app/{appid}/",
+        },
+    }
+
+
+async def test_returns_empty_on_deals_timeout():
+    client = ITADClient("fake_key")
+    with aioresponses() as m:
+        m.get(ITAD_DEALS_PATTERN, exception=asyncio.TimeoutError())
+        deals = await client.get_steam_historical_lows()
+
+    assert deals == []
+
+
+async def test_returns_empty_on_deals_invalid_json():
+    client = ITADClient("fake_key")
+    with aioresponses() as m:
+        m.get(ITAD_DEALS_PATTERN, body="not json", content_type="application/json")
+        deals = await client.get_steam_historical_lows()
+
+    assert deals == []
+
+
+async def test_steamspy_timeout_treated_as_zero_reviews():
+    client = ITADClient("fake_key")
+    with aioresponses() as m:
+        m.get(ITAD_DEALS_PATTERN, payload={"list": [_make_api_deal("A", "111")]})
+        m.get(STEAMSPY_PATTERN, exception=asyncio.TimeoutError())
+        deals = await client.get_steam_historical_lows()
+
+    assert deals == []  # 評論數視為 0 被過濾，但不應拋出例外
+
+
+async def test_skips_deal_missing_fields_keeps_valid_ones():
+    client = ITADClient("fake_key")
+    good = _make_api_deal("good", "111")
+    bad = _make_api_deal("bad", "222")
+    del bad["deal"]["regular"]
+    del bad["deal"]["cut"]
+    with aioresponses() as m:
+        m.get(ITAD_DEALS_PATTERN, payload={"list": [bad, good]})
+        m.get(STEAMSPY_PATTERN, payload={"positive": 600, "negative": 100}, repeat=True)
+        deals = await client.get_steam_historical_lows()
+
+    assert [d.id for d in deals] == ["good"]

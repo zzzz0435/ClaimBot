@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,7 +37,7 @@ class EpicClient:
                         log.warning("Epic API 回傳 HTTP %s", resp.status)
                         return []
                     data = await resp.json(content_type=None)
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
             log.warning("Epic API 請求失敗：%s", exc)
             return []
 
@@ -83,10 +85,10 @@ class EpicClient:
 
     def _get_url(self, item: dict) -> str:
         for mapping in (item.get("catalogNs") or {}).get("mappings", []):
-            if mapping.get("pageType") == "productHome":
+            if mapping.get("pageType") == "productHome" and mapping.get("pageSlug"):
                 return EPIC_STORE_BASE + mapping["pageSlug"]
         for mapping in item.get("offerMappings", []):
-            if mapping.get("pageType") == "productHome":
+            if mapping.get("pageType") == "productHome" and mapping.get("pageSlug"):
                 return EPIC_STORE_BASE + mapping["pageSlug"]
         slug = item.get("productSlug") or item.get("urlSlug")
         if slug and slug != "[]":

@@ -211,7 +211,11 @@ class FreeGamesCog(commands.Cog):
 
     @tasks.loop(hours=6)
     async def check_free_games(self):
-        await self._do_check()
+        try:
+            await self._do_check()
+        except Exception:
+            # 未預期例外若外洩會讓 tasks.loop 永久停擺，吞下並等待下次排程
+            log.exception("排程檢查發生未預期錯誤，等待下次排程重試")
 
     async def _do_check(self):
         if self._check_lock.locked():
@@ -617,7 +621,12 @@ class FreeGamesCog(commands.Cog):
     @app_commands.checks.has_permissions(manage_guild=True)
     async def checknow(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        await self._do_check()
+        try:
+            await self._do_check()
+        except Exception:
+            log.exception("/checknow 檢查失敗")
+            await interaction.followup.send("❌ 檢查過程發生錯誤，請稍後再試或查看伺服器日誌。", ephemeral=True)
+            return
         await interaction.followup.send("✅ 檢查完成，有新遊戲的話已發送通知。", ephemeral=True)
 
     @checknow.error

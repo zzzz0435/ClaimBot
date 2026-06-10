@@ -379,6 +379,30 @@ async def test_do_check_migrates_legacy_before_filtering(tmp_path):
     assert "B" in cog._seen.seen_ids(1)  # 新發送
 
 
+# --- 排程迴圈與 /checknow 的錯誤保險 ---
+
+async def test_check_loop_survives_unexpected_error(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._do_check = AsyncMock(side_effect=KeyError("boom"))
+
+    # 未預期例外不應外洩，否則 tasks.loop 會永久停擺
+    await cog.check_free_games.coro(cog)
+
+
+async def test_checknow_reports_error_when_check_fails(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._do_check = AsyncMock(side_effect=RuntimeError("boom"))
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+
+    await cog.checknow.callback(cog, interaction)
+
+    interaction.followup.send.assert_called_once()
+    msg = interaction.followup.send.call_args.args[0]
+    assert "❌" in msg
+
+
 # --- build_price_embed ---
 
 def test_price_embed_has_title_and_url():

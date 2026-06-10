@@ -5,6 +5,8 @@ from pathlib import Path
 
 import aiohttp
 
+from storage.json_io import atomic_write_json
+
 log = logging.getLogger(__name__)
 
 EMOJI_IDS_PATH = Path("data/app_emojis.json")
@@ -106,8 +108,4 @@ class EmojiSetup:
             return {}
 
     def _save(self) -> None:
-        EMOJI_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        EMOJI_IDS_PATH.write_text(
-            json.dumps(self._ids, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(EMOJI_IDS_PATH, self._ids)

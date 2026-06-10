@@ -1,3 +1,4 @@
+import asyncio
 import re
 import pytest
 import aiohttp
@@ -166,3 +167,36 @@ async def test_returns_empty_on_malformed_response():
         games = await client.get_upcoming_games()
 
     assert games == []
+
+
+async def test_returns_empty_on_timeout():
+    client = EpicClient()
+    with aioresponses() as m:
+        m.get(EPIC_URL_PATTERN, exception=asyncio.TimeoutError())
+        games = await client.get_upcoming_games()
+
+    assert games == []
+
+
+async def test_returns_empty_on_invalid_json():
+    client = EpicClient()
+    with aioresponses() as m:
+        m.get(EPIC_URL_PATTERN, body="not json", content_type="application/json")
+        games = await client.get_upcoming_games()
+
+    assert games == []
+
+
+async def test_url_falls_back_when_mapping_missing_page_slug():
+    client = EpicClient()
+    item = {
+        **MOCK_UPCOMING_ITEM,
+        "catalogNs": {"mappings": [{"pageType": "productHome"}]},  # 缺 pageSlug
+        "offerMappings": [{"pageType": "productHome"}],            # 缺 pageSlug
+    }
+    with aioresponses() as m:
+        m.get(EPIC_URL_PATTERN, payload=make_response(item))
+        games = await client.get_upcoming_games()
+
+    assert len(games) == 1
+    assert games[0].url.endswith("horizon-zero-dawn")  # fallback 至 productSlug

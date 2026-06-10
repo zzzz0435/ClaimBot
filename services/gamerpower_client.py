@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -54,7 +56,7 @@ class GamerPowerClient:
                         log.warning("GamerPower API 回傳 HTTP %s (platform=%s, type=%s)，跳過", resp.status, platform, api_type)
                         return []
                     data = await resp.json()
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
             log.warning("GamerPower API 請求失敗 (platform=%s, type=%s)：%s", platform, api_type, exc)
             return []
 
@@ -66,6 +68,8 @@ class GamerPowerClient:
         return [self._parse(item, platform, kind) for item in data if self._is_valid(item, api_type)]
 
     def _is_valid(self, item: dict, api_type: str = "game") -> bool:
+        if item.get("id") is None:
+            return False
         if item.get("status") != "Active":
             return False
         if api_type == "game":

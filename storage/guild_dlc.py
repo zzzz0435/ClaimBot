@@ -2,6 +2,8 @@ import json
 import logging
 from pathlib import Path
 
+from storage.json_io import atomic_write_json, backup_corrupt
+
 log = logging.getLogger(__name__)
 
 GUILD_DLC_PATH = Path("data/guild_dlc.json")
@@ -20,16 +22,13 @@ class GuildDLC:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             return {str(k): bool(v) for k, v in data.items()}
         except (json.JSONDecodeError, ValueError):
-            log.error("guild_dlc.json 格式損毀，重置")
+            log.error("guild_dlc.json 格式損毀，備份後重置")
+            backup_corrupt(self._path)
             self._write({})
             return {}
 
     def _write(self, settings: dict[str, bool]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._path, settings)
 
     def set(self, guild_id: int, enabled: bool) -> None:
         self._settings[str(guild_id)] = enabled

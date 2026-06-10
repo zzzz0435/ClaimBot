@@ -2,6 +2,8 @@ import json
 import logging
 from pathlib import Path
 
+from storage.json_io import atomic_write_json, backup_corrupt
+
 log = logging.getLogger(__name__)
 
 SEEN_PRICE_LOWS_PATH = Path("data/seen_price_lows.json")
@@ -31,15 +33,12 @@ class SeenPriceLows:
                     if isinstance(games, dict)
                 }
         except (json.JSONDecodeError, ValueError, TypeError):
-            log.error("seen_price_lows.json 格式損毀，重置")
+            log.error("seen_price_lows.json 格式損毀，備份後重置")
+            backup_corrupt(self._path)
             self._guilds = {}
 
     def _write(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(self._guilds, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._path, self._guilds)
 
     def is_new_low(self, guild_id: int, game_id: str, current_price: float) -> bool:
         """若從未通知過，或當前價格比上次通知的更低，則回傳 True。"""

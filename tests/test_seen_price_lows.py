@@ -51,3 +51,11 @@ def test_resets_on_corrupt_file(tmp_path):
     path.write_text("{{invalid}}")
     s = SeenPriceLows(path)
     assert s.is_new_low(1, "game_a", 9.99) is True
+
+
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "lows.json"
+    path.write_text("{{invalid}}")
+    SeenPriceLows(path)
+    bak = tmp_path / "lows.json.corrupt.bak"
+    assert bak.read_text() == "{{invalid}}"

@@ -39,3 +39,11 @@ def test_resets_on_corrupt_file(tmp_path):
     path.write_text("{{invalid}}")
     gp = GuildPlatforms(path)
     assert gp.get(111) == DEFAULT_PLATFORMS
+
+
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "gp.json"
+    path.write_text("{{invalid}}")
+    GuildPlatforms(path)
+    bak = tmp_path / "gp.json.corrupt.bak"
+    assert bak.read_text() == "{{invalid}}"

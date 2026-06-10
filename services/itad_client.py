@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -57,27 +58,31 @@ class ITADClient:
         log.info("ITAD: %d 款遊戲達到歷史新低，開始篩選評論數（>= %d）", len(at_low), min_reviews)
 
         async def enrich(d: dict) -> PriceDeal | None:
-            game = d["game"]
-            deal = d["deal"]
-            url = deal.get("url", "")
-            appid = _extract_steam_appid(url)
-            if not appid:
+            try:
+                game = d["game"]
+                deal = d["deal"]
+                url = deal.get("url", "")
+                appid = _extract_steam_appid(url)
+                if not appid:
+                    return None
+                reviews = await self._fetch_steamspy_reviews(appid)
+                if reviews < min_reviews:
+                    return None
+                store_low = self._parse_store_low(deal)
+                return PriceDeal(
+                    id=game["id"],
+                    title=game.get("title", ""),
+                    url=url,
+                    current_price=deal["price"]["amount"],
+                    original_price=deal["regular"]["amount"],
+                    currency=deal["price"]["currency"],
+                    historical_low=store_low,
+                    discount_pct=deal["cut"],
+                    image_url=f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                log.warning("ITAD deal 缺少必要欄位，跳過：%s", exc)
                 return None
-            reviews = await self._fetch_steamspy_reviews(appid)
-            if reviews < min_reviews:
-                return None
-            store_low = self._parse_store_low(deal)
-            return PriceDeal(
-                id=game["id"],
-                title=game.get("title", ""),
-                url=url,
-                current_price=deal["price"]["amount"],
-                original_price=deal["regular"]["amount"],
-                currency=deal["price"]["currency"],
-                historical_low=store_low,
-                discount_pct=deal["cut"],
-                image_url=f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
-            )
 
         results = await asyncio.gather(*[enrich(d) for d in at_low])
         filtered = [r for r in results if r is not None]
@@ -129,7 +134,7 @@ class ITADClient:
                     if isinstance(data, list):
                         return data
                     return []
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as e:
             log.warning("ITAD /deals/v2 請求失敗：%s", e)
             return []
 
@@ -148,5 +153,5 @@ class ITADClient:
                         if not isinstance(data, dict):
                             return 0
                         return int(data.get("positive", 0)) + int(data.get("negative", 0))
-            except (aiohttp.ClientError, ValueError, TypeError):
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
                 return 0

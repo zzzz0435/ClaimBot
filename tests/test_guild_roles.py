@@ -40,3 +40,11 @@ def test_resets_on_corrupt_file(tmp_path):
     path.write_text("{{invalid}}")
     gr = GuildRoles(path)
     assert gr.get(111) is None
+
+
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "gr.json"
+    path.write_text("{{invalid}}")
+    GuildRoles(path)
+    bak = tmp_path / "gr.json.corrupt.bak"
+    assert bak.read_text() == "{{invalid}}"

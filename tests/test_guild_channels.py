@@ -38,6 +38,14 @@ def test_resets_on_corrupt_file(tmp_path):
     assert gc.all_channels() == []
 
 
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "gc.json"
+    path.write_text("{{invalid}}")
+    GuildChannels(path)
+    bak = tmp_path / "gc.json.corrupt.bak"
+    assert bak.read_text() == "{{invalid}}"
+
+
 def test_get_returns_channel_id(tmp_path):
     gc = GuildChannels(tmp_path / "gc.json")
     gc.set(guild_id=111, channel_id=999)

@@ -1,3 +1,4 @@
+import asyncio
 import re
 import pytest
 import aiohttp
@@ -147,6 +148,37 @@ async def test_returns_empty_on_network_error():
         games = await client.get_free_games()
 
     assert games == []
+
+
+async def test_returns_empty_on_timeout():
+    client = GamerPowerClient()
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, exception=asyncio.TimeoutError())
+        m.get(GP_URL_PATTERN, exception=asyncio.TimeoutError())
+        games = await client.get_free_games()
+
+    assert games == []
+
+
+async def test_returns_empty_on_invalid_json():
+    client = GamerPowerClient()
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, body="not json", content_type="application/json")
+        m.get(GP_URL_PATTERN, body="not json", content_type="application/json")
+        games = await client.get_free_games()
+
+    assert games == []
+
+
+async def test_skips_items_missing_id():
+    client = GamerPowerClient()
+    item_without_id = {k: v for k, v in STEAM_RESPONSE[0].items() if k != "id"}
+    with aioresponses() as m:
+        m.get(GP_URL_PATTERN, payload=[item_without_id, STEAM_RESPONSE[0]])
+        m.get(GP_URL_PATTERN, payload=[])
+        games = await client.get_free_games()
+
+    assert [g.id for g in games] == ["1001"]
 
 
 async def test_single_platform_fetch():

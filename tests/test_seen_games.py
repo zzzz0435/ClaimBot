@@ -54,6 +54,14 @@ def test_resets_on_corrupt_file(tmp_path):
     assert path.exists()
 
 
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "seen.json"
+    path.write_text("not valid json {{{{")
+    SeenGames(path)
+    bak = tmp_path / "seen.json.corrupt.bak"
+    assert bak.read_text() == "not valid json {{{{"
+
+
 def test_new_format_does_not_need_migration(tmp_path):
     sg = SeenGames(tmp_path / "seen.json")
     assert sg.needs_migration() is False

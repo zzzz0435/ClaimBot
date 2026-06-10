@@ -2,6 +2,8 @@ import json
 import logging
 from pathlib import Path
 
+from storage.json_io import atomic_write_json, backup_corrupt
+
 log = logging.getLogger(__name__)
 
 
@@ -26,18 +28,14 @@ class SeenGames:
             else:
                 self._write({})
         except (json.JSONDecodeError, KeyError, ValueError):
-            log.error("seen_games.json 格式損毀，重置")
+            log.error("seen_games.json 格式損毀，備份後重置")
+            backup_corrupt(self._path)
             self._write({})
 
     def _write(self, guilds: dict[str, set[str]]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(
-                {"guilds": {k: sorted(v) for k, v in guilds.items()}},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        atomic_write_json(
+            self._path,
+            {"guilds": {k: sorted(v) for k, v in guilds.items()}},
         )
 
     def needs_migration(self) -> bool:

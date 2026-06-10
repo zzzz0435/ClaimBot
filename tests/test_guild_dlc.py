@@ -38,3 +38,11 @@ def test_resets_on_corrupt_file(tmp_path):
     path.write_text("{{invalid}}")
     gd = GuildDLC(path)
     assert gd.get(111) is False
+
+
+def test_corrupt_file_backed_up_before_reset(tmp_path):
+    path = tmp_path / "dlc.json"
+    path.write_text("{{invalid}}")
+    GuildDLC(path)
+    bak = tmp_path / "dlc.json.corrupt.bak"
+    assert bak.read_text() == "{{invalid}}"
