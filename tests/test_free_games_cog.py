@@ -379,6 +379,101 @@ async def test_do_check_migrates_legacy_before_filtering(tmp_path):
     assert "B" in cog._seen.seen_ids(1)  # 新發送
 
 
+def _make_interaction(guild_id: int = 1) -> MagicMock:
+    interaction = MagicMock()
+    interaction.guild_id = guild_id
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+# --- /freegames ---
+
+async def test_freegames_replies_to_requester_not_channel(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._guild_roles.set(1, 555)  # 即使設定了通知身份組
+    cog._client.get_free_games.return_value = [make_game("A")]
+    channel = AsyncMock()
+    cog._bot.get_channel.return_value = channel
+    interaction = _make_interaction()
+
+    await cog.freegames.callback(cog, interaction)
+
+    channel.send.assert_not_called()  # 不發到通知頻道
+    assert interaction.followup.send.called
+    for call in interaction.followup.send.call_args_list:
+        content = call.kwargs.get("content", "") or (call.args[0] if call.args else "")
+        assert "<@&" not in str(content)  # 不 ping 身份組
+
+
+async def test_freegames_works_without_channel_configured(tmp_path):
+    cog = _make_cog(tmp_path)  # 未設定通知頻道
+    cog._client.get_free_games.return_value = [make_game("A")]
+    interaction = _make_interaction()
+
+    await cog.freegames.callback(cog, interaction)
+
+    embed_calls = [c for c in interaction.followup.send.call_args_list if c.kwargs.get("embed")]
+    assert len(embed_calls) == 1
+
+
+async def test_freegames_includes_dlc_when_enabled(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_dlc.set(1, True)
+    cog._client.get_free_games.return_value = []
+    interaction = _make_interaction()
+
+    await cog.freegames.callback(cog, interaction)
+
+    cog._client.get_free_games.assert_awaited_once_with(
+        ["steam", "epic-games-store"], include_dlc=True
+    )
+
+
+async def test_freegames_excludes_dlc_by_default(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._client.get_free_games.return_value = []
+    interaction = _make_interaction()
+
+    await cog.freegames.callback(cog, interaction)
+
+    cog._client.get_free_games.assert_awaited_once_with(
+        ["steam", "epic-games-store"], include_dlc=False
+    )
+
+
+# --- _do_check 回傳值與 /checknow busy 回報 ---
+
+async def test_do_check_returns_true_when_executed(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+    cog._client.get_free_games.return_value = []
+    cog._bot.get_channel.return_value = AsyncMock()
+
+    assert await cog._do_check() is True
+
+
+async def test_do_check_returns_false_when_lock_held(tmp_path):
+    cog = _make_cog(tmp_path)
+    cog._guild_channels.set(1, 100)
+
+    async with cog._check_lock:
+        assert await cog._do_check() is False
+
+
+async def test_checknow_reports_busy_when_check_in_progress(tmp_path):
+    cog = _make_cog(tmp_path)
+    interaction = _make_interaction()
+
+    async with cog._check_lock:
+        await cog.checknow.callback(cog, interaction)
+
+    msg = interaction.followup.send.call_args.args[0]
+    assert "進行中" in msg
+    assert "✅" not in msg
+
+
 # --- 排程迴圈與 /checknow 的錯誤保險 ---
 
 async def test_check_loop_survives_unexpected_error(tmp_path):

@@ -217,10 +217,11 @@ class FreeGamesCog(commands.Cog):
             # 未預期例外若外洩會讓 tasks.loop 永久停擺，吞下並等待下次排程
             log.exception("排程檢查發生未預期錯誤，等待下次排程重試")
 
-    async def _do_check(self):
+    async def _do_check(self) -> bool:
+        """執行檢查並回傳是否實際執行（False 表示已有檢查進行中而跳過）。"""
         if self._check_lock.locked():
             log.info("檢查已在進行中，跳過")
-            return
+            return False
         async with self._check_lock:
             if self._seen.needs_migration():
                 self._seen.migrate([g.id for g in self._bot.guilds])
@@ -228,7 +229,7 @@ class FreeGamesCog(commands.Cog):
             guild_items = self._guild_channels.all_items()
             if not guild_items:
                 log.info("尚未有任何伺服器設定頻道，跳過")
-                return
+                return True
 
             needed_platforms: set[str] = set()
             need_dlc = False
@@ -287,6 +288,7 @@ class FreeGamesCog(commands.Cog):
 
             self._last_check = datetime.now(timezone.utc)
             log.info("已發送 %d 則通知至 %d 個伺服器", total_sent, len(guild_items))
+            return True
 
     async def _check_price_lows(self, guild_items: list[tuple[int, int]]) -> None:
         if self._itad_client is None:
@@ -555,7 +557,7 @@ class FreeGamesCog(commands.Cog):
         )
         embed.add_field(
             name="🔍 `/freegames`",
-            value="立即查詢目前所有限時免費遊戲，並發送至本伺服器的通知頻道。",
+            value="查詢目前所有限時免費遊戲，結果**只有你看得到**，不會打擾頻道。",
             inline=False,
         )
         embed.add_field(
@@ -622,12 +624,15 @@ class FreeGamesCog(commands.Cog):
     async def checknow(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            await self._do_check()
+            ran = await self._do_check()
         except Exception:
             log.exception("/checknow 檢查失敗")
             await interaction.followup.send("❌ 檢查過程發生錯誤，請稍後再試或查看伺服器日誌。", ephemeral=True)
             return
-        await interaction.followup.send("✅ 檢查完成，有新遊戲的話已發送通知。", ephemeral=True)
+        if ran:
+            await interaction.followup.send("✅ 檢查完成，有新遊戲的話已發送通知。", ephemeral=True)
+        else:
+            await interaction.followup.send("⏳ 已有一個檢查正在進行中，請稍候再試。", ephemeral=True)
 
     @checknow.error
     async def checknow_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -636,40 +641,25 @@ class FreeGamesCog(commands.Cog):
 
     # ── /freegames ────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="freegames", description="查詢目前限時免費遊戲")
+    @app_commands.command(name="freegames", description="查詢目前限時免費遊戲（結果只有你看得到）")
     async def freegames(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        channel_id = self._guild_channels.get(interaction.guild_id)
-        target = self._bot.get_channel(channel_id) if channel_id else None
-
-        if target is None:
-            await interaction.followup.send("❌ 尚未設定通知頻道，請先執行 `/setchannel`。", ephemeral=True)
-            return
-
         guild_platforms = self._guild_platforms.get(interaction.guild_id)
-        games = await self._client.get_free_games(guild_platforms)
+        include_dlc = self._guild_dlc.get(interaction.guild_id)
+        games = await self._client.get_free_games(guild_platforms, include_dlc=include_dlc)
 
         if not games:
             await interaction.followup.send("目前沒有限時免費遊戲 🎮", ephemeral=True)
             return
 
-        role_id = self._guild_roles.get(interaction.guild_id)
-        content = f"<@&{role_id}>" if role_id else None
-
-        sent = 0
+        # 私下回覆查詢者本人，不發到通知頻道、不 ping 身份組，避免洗版
+        await interaction.followup.send(
+            f"🎮 **目前限時免費遊戲（共 {len(games)} 款）**", ephemeral=True
+        )
         for game in games:
-            try:
-                await target.send(
-                    content=content,
-                    embed=build_embed(game, self._emoji_ids),
-                    view=build_view(game, self._emoji_ids),
-                )
-                sent += 1
-            except discord.HTTPException as e:
-                log.error("手動發送失敗 channel=%s game=%s: %s", target.id, game.id, e)
-
-        if sent:
-            await interaction.followup.send(f"✅ 已發送 {sent} 款遊戲至 {target.mention}", ephemeral=True)
-        else:
-            await interaction.followup.send("❌ 發送失敗，請確認 Bot 在該頻道有發訊息的權限。", ephemeral=True)
+            await interaction.followup.send(
+                embed=build_embed(game, self._emoji_ids),
+                view=build_view(game, self._emoji_ids),
+                ephemeral=True,
+            )
